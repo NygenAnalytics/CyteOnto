@@ -1,1 +1,6 @@
-.venv
+data/
+.venv/
+__pycache__/
+tmp/
+.env
+.mypy_cache/

@@ -1,8 +1,8 @@
 # cyteonto/config.py
 
 import os
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -17,9 +17,9 @@ class Config:
     EMBEDDING_MODEL_PROVIDER = os.getenv("EMBEDDING_MODEL_PROVIDER", "deepinfra")
 
     # LLM Config
-    TEXT_MODEL = os.getenv("TEXT_MODEL", "grok-3-mini")
-    TEXT_MODEL_API_KEY = os.getenv("TEXT_MODEL_API_KEY", "")
-    TEXT_MODEL_PROVIDER = os.getenv("TEXT_MODEL_PROVIDER", "xai")
+    BASE_AGENT = os.getenv("BASE_AGENT", "grok-3-mini")
+    BASE_AGENT_API_KEY = os.getenv("BASE_AGENT_API_KEY", "")
+    BASE_AGENT_PROVIDER = os.getenv("BASE_AGENT_PROVIDER", "xai")
 
 
 CONFIG = Config()

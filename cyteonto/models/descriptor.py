@@ -1,5 +1,6 @@
 # models/descriptor.py
 
+import asyncio
 from textwrap import dedent
 
 from pydantic_ai import Agent
@@ -7,7 +8,7 @@ from pydantic_ai.messages import ModelMessage
 
 from ..llm_config import AGENT_CONFIG, AgentUsage, agent_run
 from ..logger_config import logger
-from ..models import CellDescription
+from ..model import CellDescription
 from .tools.pubmed import get_pubmed_abstracts
 
 
@@ -57,6 +58,81 @@ def get_description_prompt(data: str) -> str:
         )
     )
     return prompt
+
+
+async def generate_descriptions(
+    base_agent: Agent,
+    terms: list[str],
+    agent_usage: AgentUsage,
+    messages: list[ModelMessage],
+) -> list[CellDescription]:
+    """
+    Generate descriptions using a semaphore and describe_cell_type() function.
+    Similar to generate_embeddings but for LLM description generation.
+
+    Args:
+        base_agent: The base agent to use for generation
+        terms: list of initial labels
+        agent_usage: AgentUsage object to track LLM usage
+        messages: A list of messages to provide context
+
+    Returns:
+        list of CellDescription objects
+    """
+    if not terms:
+        logger.warning("No terms provided for description generation")
+        return []
+
+    # Process descriptions with concurrency control
+    semaphore = asyncio.Semaphore(AGENT_CONFIG.MAX_CONCURRENT_DESCRIPTIONS)
+
+    async def generate_single_description(index: int, label: str) -> CellDescription:
+        """Generate description for a single cell type"""
+        async with semaphore:
+            description = await describe_cell_type(
+                base_agent=base_agent,
+                agent_usage=agent_usage,
+                initial_label=label,
+                messages=messages,
+            )
+            if not description:
+                logger.error(
+                    f"[{index + 1}] Failed to generate description for: {label}"
+                )
+                description = CellDescription.get_blank()  # Fallback
+            return description
+
+    # Create concurrent tasks for all terms
+    tasks = []
+    for i, label in enumerate(terms):
+        task = generate_single_description(i, label)
+        tasks.append(task)
+
+    # Execute all tasks concurrently
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results and maintain order
+    descriptions: list[CellDescription] = [
+        CellDescription.get_blank() for _ in range(len(terms))
+    ]
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Task {i} failed with exception: {result}")
+            # Keep the blank placeholder for this index
+        elif isinstance(result, CellDescription):
+            descriptions[i] = result
+        else:
+            logger.error(f"Task {i} returned unexpected result format: {type(result)}")
+
+    # Filter out blank placeholders and return only successful ones
+    successful_descriptions = [
+        desc for desc in descriptions if desc != CellDescription.get_blank()
+    ]
+
+    logger.info(
+        f"Generated {len(successful_descriptions)} descriptions out of {len(terms)} terms"
+    )
+    return successful_descriptions
 
 
 async def describe_cell_type(

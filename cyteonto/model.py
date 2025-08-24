@@ -1,4 +1,4 @@
-# cyteonto/models.py
+# cyteonto/model.py
 
 from pydantic import BaseModel, Field
 

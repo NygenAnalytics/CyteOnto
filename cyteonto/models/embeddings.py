@@ -115,7 +115,8 @@ async def generate_embeddings(
 
     # Check if all embeddings were generated
     if any(emb is None for emb in embeddings):
-        logger.error("Some embeddings failed to generate")
-        return None
+        logger.error(
+            "Some embeddings failed to generate. Consider re-running the pipeline."
+        )
 
     return np.array(embeddings)

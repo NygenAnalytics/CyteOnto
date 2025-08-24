@@ -36,6 +36,7 @@ class AgentConfig:
         input_tokens_limit=20_000,
     )
     MAX_TOOL_CALLS: int = 3
+    MAX_CONCURRENT_DESCRIPTIONS: int = 10
 
 
 AGENT_CONFIG = AgentConfig()
