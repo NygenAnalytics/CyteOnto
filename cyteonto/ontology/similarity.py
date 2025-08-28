@@ -110,10 +110,16 @@ class OntologySimilarity:
 
         if self._ontology is None:
             # Fallback to simple string similarity
+            logger.warning(
+                f"Ontology not loaded, falling back to simple string similarity for {ontology_id1} and {ontology_id2}"
+            )
             return self.compute_simple_similarity(ontology_id1, ontology_id2)
 
         # check if ontology_id1 and ontology_id2 are ontology id format
         if not ontology_id1.startswith("CL:") or not ontology_id2.startswith("CL:"):
+            logger.warning(
+                f"Ontology IDs are not in CL: format, falling back to simple string similarity for {ontology_id1} and {ontology_id2}"
+            )
             return self.compute_simple_similarity(ontology_id1, ontology_id2)
 
         try:
@@ -123,6 +129,9 @@ class OntologySimilarity:
 
             if not class1 or not class2:
                 # Fallback to simple string similarity
+                logger.warning(
+                    f"Ontology IDs are not found in the ontology, falling back to simple string similarity for {ontology_id1} and {ontology_id2}"
+                )
                 return self.compute_simple_similarity(ontology_id1, ontology_id2)
 
             def weighted_ancestors(cls):

@@ -182,10 +182,14 @@ class OntologyExtractor:
         if self._mapping_df is None:
             return [], []
 
-        # Group by ontology_id and take the first label as primary
-        unique_df = self._mapping_df.drop_duplicates(subset=["ontology_id"])
-        ontology_ids = unique_df["ontology_id"].unique().tolist()
-        ontology_terms = unique_df["label"].unique().tolist()
+        # Group by ontology_id and join labels with ;
+        unique_df = (
+            self._mapping_df.groupby("ontology_id")["label"]
+            .apply(";".join)
+            .reset_index()
+        )
+        ontology_ids = unique_df["ontology_id"].tolist()
+        ontology_terms = unique_df["label"].tolist()
 
         logger.info(
             f"Identified {len(ontology_ids)} ontology terms for description generation"

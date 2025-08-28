@@ -1,6 +1,10 @@
-data/
 .venv/
 __pycache__/
 tmp/
 .env
 .mypy_cache/
+*.csv
+*.owl
+*.npz
+*.npz.meta
+*.json

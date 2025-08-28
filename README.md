@@ -1,371 +1,471 @@
-# CyteOnto
+# 🧬 CyteOnto
 
-A library utilizing LLMs and Cell Ontology to quantify the similarity and meaningfulness between cell annotations. When benchmarking a new algorithm for annotations, CyteOnto helps measure how close the predicted annotations are to the original annotations provided by authors, using cell ontology as reference.
+**A powerful AI-driven toolkit for quantifying cell type annotation similarity using Large Language Models and Cell Ontology**
 
-## 🎯 Features
+CyteOnto helps researchers benchmark cell type annotation algorithms by measuring how closely predicted annotations align with reference annotations, leveraging the structured knowledge of Cell Ontology (CL) and advanced AI techniques.
 
-- **Automated Setup**: Generates descriptions for all Cell Ontology terms and creates vector embeddings
-- **Smart Caching**: Uses NPZ files for efficient embedding storage with naming convention `CO_<text-model>_<embedding-model>.npz`
-- **Dual Similarity Metrics**: 
-  - **Cosine Similarity**: For semantic similarity between embeddings
-  - **Ontology Hierarchy Similarity**: Using Cell Ontology structure and relationships
-- **Batch Processing**: Efficiently compare multiple algorithms against reference annotations
-- **AnnData Integration**: Direct support for single-cell analysis workflows
-- **Modular Design**: Use individual components (setup, matcher, etc.) as needed
+[![Python](https://img.shields.io/badge/Python-3.12%2B-blue)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![AI-Powered](https://img.shields.io/badge/AI-Powered-purple)](https://pydantic-ai.docs.pydantic.dev/)
 
-## 🚀 Quick Start
+---
 
-### Installation
+## 🎯 Key Features
 
+### 🤖 **AI-Powered Description Generation**
+- **LLM Integration**: Uses state-of-the-art language models to generate rich, contextual descriptions of cell types
+- **PubMed Integration**: Automatically incorporates scientific literature for accurate descriptions
+- **Structured Output**: Generates comprehensive cell descriptions with function, markers, and disease relevance
+
+### 📐 **Advanced Similarity Metrics**
+- **Embedding Similarity**: Cosine similarity between semantic embeddings
+- **Ontology Hierarchy Similarity**: Leverages Cell Ontology structure and relationships
+- **Dual-Method Analysis**: Combines both approaches for comprehensive comparison
+
+### 🗂️ **Study Organization**
+- **Multi-Study Support**: Organize comparisons by study/dataset for clean separation
+- **Intelligent Caching**: Study-specific caches prevent file collisions
+- **Cross-Study Analysis**: Easy comparison of algorithm performance across datasets
+
+### ⚡ **Performance & Scalability**
+- **Smart Caching**: NPZ/JSON caching system with metadata validation
+- **Batch Processing**: Efficient comparison of multiple algorithms simultaneously
+- **Async Processing**: Non-blocking operations with progress tracking
+- **Memory Efficient**: Optimized for large-scale comparisons
+
+---
+
+## 🚀 Installation
+
+### Prerequisites
+- Python 3.12+
+- UV package manager (recommended)
+
+### Quick Install
 ```bash
 # Clone the repository
 git clone <repository-url>
 cd CyteOnto
 
-# Install with uv (recommended)
+# Install with UV
 uv sync
 ```
 
-### Basic Usage
-
-```python
-import asyncio
-from cyteonto import CyteOnto
-from pydantic_ai import Agent
-from pydantic_ai.models import xai
-
-async def main():
-    # 1. Initialize CyteOnto
-    cyteonto = CyteOnto(
-        text_model="grok-3-mini",
-        embedding_model="Qwen/Qwen3-Embedding-8B",
-        embedding_provider="deepinfra"
-    )
-    
-    # 2. Setup embeddings (first time only)
-    model = xai.XAIModel("grok-3-mini")
-    agent = Agent(model, name="cell_descriptor")
-    
-    success = await cyteonto.setup_embeddings(
-        base_agent=agent,
-        generate_embeddings=True
-    )
-    
-    # 3. Compare annotations
-    author_labels = ["T cells", "B cells", "NK cells"]
-    algorithm_labels = ["T lymphocytes", "B lymphocytes", "NK cells"]
-    
-    cosine_sims, ontology_sims = await cyteonto.compare_single_pair(
-        author_labels=author_labels,
-        algorithm_labels=algorithm_labels,
-        base_agent=agent
-    )
-    
-    print(f"Cosine similarities: {cosine_sims}")
-    print(f"Ontology similarities: {ontology_sims}")
-
-# Run the example
-asyncio.run(main())
-```
-
-## 📋 Setup Phase
-
-CyteOnto automatically handles a comprehensive setup phase:
-
-1. **File Validation**: Checks for required ontology files (`cl.owl`, `cell_to_cell_ontology.csv`)
-2. **Description Generation**: Creates detailed descriptions for all Cell Ontology terms using LLM
-3. **Embedding Creation**: Generates embeddings for descriptions using specified embedding model
-4. **Smart Caching**: Saves to NPZ format for fast retrieval: `CO_grok-3-mini_Qwen3-Embedding-8B.npz`
-
-### Setup Options
-
-```python
-# Quick setup (generate only if missing)
-await cyteonto.setup_embeddings(base_agent, generate_embeddings=True)
-
-# Force regeneration
-await cyteonto.setup_embeddings(base_agent, force_regenerate=True)
-
-# Check setup status
-info = cyteonto.get_setup_info()
-print(f"Ready: {info['ready']}")
-```
-
-## 🔍 Similarity Matching
-
-### Cosine Similarity Matching
-
-Uses semantic embeddings to find closest Cell Ontology terms:
-
-```python
-from cyteonto import CyteOntoMatcher
-
-matcher = CyteOntoMatcher(embeddings_file_path=embeddings_path)
-
-# Find closest ontology terms
-matches = matcher.find_closest_ontology_terms(
-    query_embeddings=user_embeddings,
-    top_k=5,
-    min_similarity=0.3
-)
-
-# Get best match for single query
-best_match = matcher.find_best_ontology_match(
-    query_embedding=single_embedding,
-    min_similarity=0.1
-)
-```
-
-### Ontology Hierarchy Similarity
-
-Computes similarity based on Cell Ontology structure and relationships:
-
-```python
-# Compare using ontology hierarchy
-similarities = matcher.compute_ontology_similarity(
-    author_labels=["T cells", "B cells"],
-    user_labels=["T lymphocytes", "Plasma cells"]
-)
-
-# Direct ontology ID comparison
-similarities = matcher.compute_pairwise_ontology_similarities(
-    author_ontology_ids=["CL:0000084", "CL:0000236"], 
-    user_ontology_ids=["CL:0000084", "CL:0000786"]
-)
-```
-
-## 📊 Batch Processing
-
-### Multiple Algorithm Comparison
-
-```python
-# Compare multiple algorithms at once
-comparison_data = [
-    ("Algorithm_1", author_labels, algo1_labels),
-    ("Algorithm_2", author_labels, algo2_labels),
-    ("Algorithm_3", author_labels, algo3_labels),
-]
-
-results_df = await cyteonto.compare_batch(
-    comparison_data=comparison_data,
-    base_agent=agent,
-    use_descriptions=True
-)
-
-# Get summary statistics
-summary = cyteonto.compute_summary_statistics(results_df)
-```
-
-### AnnData Integration
-
-Direct support for single-cell analysis workflows:
-
-```python
-# Compare algorithms across AnnData objects
-results_df = await cyteonto.compare_anndata_objects(
-    anndata_objects=[adata1, adata2],
-    target_columns=['leiden_clusters', 'seurat_clusters'],
-    author_column='cell_type_manual',
-    algorithm_names=['Leiden', 'Seurat'],
-    base_agent=agent
-)
-```
-
-## 🏗 Architecture
-
-### Core Components
-
-- **CyteOnto**: Main orchestrator class for batch processing
-- **CyteOntoSetup**: Handles setup phase and file management
-- **CyteOntoMatcher**: Provides similarity matching capabilities
-- **VectorStore**: Manages NPZ embedding storage/retrieval
-- **OntologyExtractor**: Processes Cell Ontology mappings
-- **EmbeddingGenerator**: Creates embeddings for cell descriptions
-
-### File Structure
-
-```
-cyteonto/
-├── storage/           # Vector storage and file utilities
-├── ontology/          # Cell ontology processing  
-├── pipeline/          # Description and embedding generation
-├── matcher/           # Similarity matching
-├── data/
-│   ├── cell_ontology/ # Cell Ontology files
-│   └── embedding/     # Generated embeddings and descriptions
-└── main.py           # Main CyteOnto class
-```
-
-## ⚙️ Configuration
-
-Set environment variables in `.env`:
-
+### Environment Variables
 ```bash
-# LLM Configuration
-TEXT_MODEL="grok-3-mini"
-TEXT_MODEL_API_KEY="your_xai_api_key"
-TEXT_MODEL_PROVIDER="xai"
+# Required for AI models
+DEEPINFRA_API_KEY=your_deepinfra_api_key_here   # for using deepinfra provided models
+GROQ_API_KEY=your_groq_api_key_here             # for using groq provided models
+OPENROUTER_API_KEY=your_groq_api_key_here       # for using openrouter provided models
+OPENAI_API_KEY=your_openai_api_key_here         # for using openai models
+GOOGLE_API_KEY=your_google_api_key_here         # for using gemini models
+XAI_API_KEY=your_xai_api_key_here               # for using grok-3, grok-4, etc.
 
-# Embedding Configuration  
-EMBEDDING_MODEL="Qwen/Qwen3-Embedding-8B"
-EMBEDDING_MODEL_API_KEY="your_deepinfra_token"
-EMBEDDING_MODEL_PROVIDER="deepinfra"
+# Embedding model
+# NOTE: by default we are using deepinfra as embedding model provider.
+EMBEDDING_MODEL_API_KEY=your_deepinfra_api_key_here
 
-# Optional
-NCBI_API_KEY="your_ncbi_key"  # For PubMed abstracts
-LOGFIRE_API_KEY="your_logfire_key"  # For logging
+# Optional: for higer rate limits
+NCBI_API_KEY=your_ncbi_api_key_here             # for using pubmed tool calls
+LOGFIRE_API_KEY=your_logfire_api_key_here       # for telemetry data
 ```
-
-### Supported Providers
-
-- **LLM Models**: XAI (Grok), OpenAI, others via pydantic-ai
-- **Embedding Models**: DeepInfra, OpenAI, Google, Ollama
-
-## 🔧 Advanced Usage
-
-### Custom Embedding Paths
-
-```python
-from pathlib import Path
-
-cyteonto = CyteOnto(
-    embeddings_file_path=Path("custom/path/to/embeddings.npz")
-)
-```
-
-### Component-Level Usage
-
-```python
-# Use individual components
-from cyteonto.storage import VectorStore
-from cyteonto.ontology import OntologyExtractor
-
-vector_store = VectorStore()
-extractor = OntologyExtractor(mapping_csv_path)
-```
-
-### Model Configuration
-
-```python
-from cyteonto import EMBDModelConfig
-
-# Custom embedding configuration
-embd_config = EMBDModelConfig(
-    provider="deepinfra",
-    model="Qwen/Qwen3-Embedding-8B", 
-    apiKey="your_key",
-    maxConcEmbed=20  # Concurrent requests
-)
-```
-
-## 📈 Results Format
-
-### Comparison Results DataFrame
-
-```python
-# Columns in results_df:
-- algorithm: Algorithm name
-- author_label: Reference cell type label
-- algorithm_label: Predicted cell type label  
-- cosine_similarity: Embedding-based similarity (0-1)
-- ontology_similarity: Hierarchy-based similarity (0-1)
-- pair_index: Index of the comparison pair
-```
-
-### Summary Statistics
-
-```python
-# Summary statistics per algorithm:
-- mean_cosine_similarity: Average cosine similarity
-- std_cosine_similarity: Standard deviation
-- min/max_cosine_similarity: Range
-- mean_ontology_similarity: Average ontology similarity
-- count_cosine_similarity: Number of comparisons
-```
-
-## 🧪 Example Use Cases
-
-1. **Algorithm Benchmarking**: Compare multiple clustering/annotation algorithms
-2. **Cross-Study Validation**: Evaluate annotation consistency across datasets  
-3. **Quality Control**: Assess annotation quality using ontology relationships
-4. **Method Development**: Test new cell type annotation approaches
-
-## 🤝 Contributing
-
-CyteOnto uses a modular architecture making it easy to extend:
-
-- Add new similarity metrics in `matcher/`
-- Support new embedding providers in `llm_config.py`
-- Extend ontology processing in `ontology/`
-
-## 📜 License
-
-[Your License Here]
-
-## 🙋 Support
-
-For questions and support:
-- Check the example usage in `example_usage.py`
-- Review the comprehensive docstrings in each module
-- Open issues on the repository
 
 ---
 
-**CyteOnto**: Making cell type annotation comparison ontologically meaningful! 🧬✨
-
-## Mermaid
+## 🔄 Workflow
 
 ```mermaid
-graph TB
-    subgraph "Setup Phase"
-        A[CyteOntoSetup] --> B[Check Files]
-        B --> C{Embeddings Exist?}
-        C -->|No| D[OntologyExtractor]
-        D --> E[Generate Descriptions]
-        E --> F[EmbeddingGenerator]
-        F --> G[Save NPZ File]
-        C -->|Yes| H[Ready]
-        G --> H
-    end
+flowchart TD
+    A["📊 Input: Cell Labels"] --> B["🤖 LLM Description Generation"]
+    B --> C["📐 Embedding Generation"]
+    C --> D["🎯 Ontology Matching"]
+    D --> E["🧮 Similarity Calculation"]
+    E --> F["📈 Results & Analysis"]
     
-    subgraph "Data Sources"
-        I[Cell Ontology CSV]
-        J[CL.owl File]
-        K[User Labels]
-        L[Author Labels]
-    end
+    B --> B1["💾 Cache Descriptions<br/>(JSON)"]
+    C --> C1["💾 Cache Embeddings<br/>(NPZ)"]
+    D --> D1["🔗 Cell Ontology<br/>(OWL)"]
     
-    subgraph "Core Processing"
-        M[CyteOnto Main Class]
-        N[CyteOntoMatcher]
-        O[VectorStore]
-        P[OntologySimilarity]
-    end
+    G["⚙️ Setup Process"] --> H["📚 Load Cell Ontology"]
+    H --> I["🤖 Generate Descriptions<br/>for All CL Terms"]
+    I --> J["📐 Create Embeddings<br/>for All CL Terms"] 
+    J --> K["💾 Save Base Cache"]
     
-    subgraph "Outputs"
-        Q[Cosine Similarities]
-        R[Ontology Similarities]
-        S[Results DataFrame]
-        T[Summary Statistics]
-    end
-    
-    I --> D
-    J --> P
-    K --> M
-    L --> M
-    
-    H --> M
-    M --> N
-    N --> O
-    N --> P
-    
-    N --> Q
-    P --> R
-    M --> S
-    S --> T
+    L["🏥 Study Organization"] --> M["📁 study1/"]
+    L --> N["📁 study2/"]
+    L --> O["📁 study3/"]
+    M --> M1["📂 author/"]
+    M --> M2["📂 algorithms/"]
+    N --> N1["📂 author/"]
+    N --> N2["📂 algorithms/"]
     
     style A fill:#e1f5fe
-    style M fill:#f3e5f5
-    style N fill:#fff3e0
-    style S fill:#e8f5e8
+    style F fill:#e8f5e8
+    style G fill:#fff3e0
+    style L fill:#f3e5f5
 ```
+
+---
+
+## ⚡ Quick Start
+
+### 1. Basic Setup
+```python
+import cyteonto
+import os
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+# Initialize your LLM agent
+model = OpenAIModel(
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    provider=OpenAIProvider(
+        base_url="https://api.deepinfra.com/v1/openai",
+        api_key=os.getenv("DEEPINFRA_API_KEY"),
+    ),
+)
+agent = Agent(model)
+
+# One-time setup: Generate ontology embeddings
+await cyteonto.setup(
+    base_agent=agent,
+    embedding_model="Qwen/Qwen3-Embedding-8B",
+    embedding_provider="deepinfra",
+)
+```
+
+> The description and embedding generarion step will be skipped if the files are already present for the given models. Look "File Organization" below for how the files are stored.
+
+### 2. Initialize CyteOnto
+```python
+# Create CyteOnto instance
+cyto = cyteonto.CyteOnto.with_setup(
+    base_agent=agent,
+    embedding_model="Qwen/Qwen3-Embedding-8B", 
+    embedding_provider="deepinfra"
+)
+```
+
+### 3. Compare Cell Type Annotations
+```python
+# Your data
+author_labels = ["animal stem cell", "BFU-E", "CFU-M", "neutrophilic granuloblast"]
+algorithm1_labels = ["stem cell", "blast forming unit erythroid", "erythroid stem cell", "spermatogonium"]
+algorithm2_labels = ["neuronal receptor cell", "stem cell", "smooth muscle cell", "ovum"]
+
+# Perform batch comparison
+results_df = await cyto.compare_batch(
+    author_labels=author_labels,
+    algo_comparison_data=[
+        ("CellTypist", algorithm1_labels),
+        ("Scanpy", algorithm2_labels)
+    ],
+    study_name="liver_dataset_2024"  # Organize by study
+)
+
+print(results_df)
+```
+
+### 4. Analyze Results
+```python
+# Detailed results with all information
+print("\n🔍 Detailed Results:")
+print(results_df[['study_name', 'algorithm', 'author_label', 'algorithm_label', 
+                 'similarity_method', 'ontology_hierarchy_similarity']].head())
+
+# Summary statistics
+print("\n📊 Algorithm Performance:")
+performance = results_df.groupby('algorithm')['ontology_hierarchy_similarity'].agg(['mean', 'std', 'count'])
+print(performance)
+
+# Method breakdown
+print("\n🔬 Similarity Methods Used:")
+print(results_df['similarity_method'].value_counts())
+```
+
+---
+
+## 📊 Example Output
+
+### Detailed Comparison Results
+```
+     study_name    algorithm  pair_index         author_label              algorithm_label
+0  liver_dataset_2024  CellTypist          0     animal stem cell                    stem cell
+1  liver_dataset_2024  CellTypist          1                BFU-E  blast forming unit erythroid
+2  liver_dataset_2024    Scanpy          0     animal stem cell      neuronal receptor cell
+
+  author_ontology_id  author_embedding_similarity algorithm_ontology_id  algorithm_embedding_similarity
+0         CL:0000548                       0.8234            CL:0000034                          0.7891
+1         CL:0000558                       0.9156            CL:0000558                          0.9876
+2         CL:0000548                       0.8234            CL:0000101                          0.7234
+
+   ontology_hierarchy_similarity     similarity_method
+0                          0.7502    ontology_hierarchy
+1                          1.0000    ontology_hierarchy
+2                          0.4521    ontology_hierarchy
+```
+
+### Performance Summary
+```
+Algorithm Performance:
+               mean       std  count
+algorithm                          
+CellTypist   0.8751    0.1245      4
+Scanpy       0.6572    0.2134      4
+
+Similarity Methods Used:
+ontology_hierarchy    7
+string_similarity     1
+partial_match        0
+no_matches           0
+```
+
+---
+
+## 🗂️ File Organization
+
+CyteOnto automatically organizes your files for optimal caching and study management:
+
+```
+cyteonto/data/
+├── cell_ontology/
+│   ├── cl-basic.owl                            # Cell Ontology file
+│   └── cell_to_cell_ontology.csv               # Ontology mappings
+├── embedding/
+│   ├── cell_ontology/
+│   │   └── embeddings_Qwen-Qwen3-235B_Qwen-Qwen3-Embedding-8B.npz
+│   └── descriptions/
+│       └── descriptions_Qwen-Qwen3-235B.json
+└── user_files/
+    ├── embeddings/
+    │   ├── liver_dataset_2024/                 # Study-specific organization
+    │   │   ├── author/
+    │   │   │   └── author_embeddings_*.npz
+    │   │   └── algorithms/
+    │   │       ├── CellTypist_embeddings_*.npz
+    │   │       └── Scanpy_embeddings_*.npz
+    │   └── brain_dataset_2024/
+    │       ├── author/
+    │       └── algorithms/
+    └── descriptions/
+        ├── liver_dataset_2024/
+        └── brain_dataset_2024/
+```
+
+---
+
+## 🔧 Advanced Usage
+
+### Multi-Study Comparison
+```python
+# Compare same algorithms across different studies
+studies = [
+    ("healthy_liver", healthy_author_labels, [("CellTypist", healthy_algo1), ("Scanpy", healthy_algo2)]),
+    ("diseased_liver", diseased_author_labels, [("CellTypist", diseased_algo1), ("Scanpy", diseased_algo2)]),
+    ("lung_tissue", lung_author_labels, [("CellTypist", lung_algo1), ("Scanpy", lung_algo2)])
+]
+
+all_results = []
+for study_name, author_labels, algo_data in studies:
+    study_results = await cyto.compare_batch(
+        author_labels, algo_data, study_name=study_name
+    )
+    all_results.append(study_results)
+
+# Combine all studies for cross-study analysis
+combined_df = pd.concat(all_results, ignore_index=True)
+
+# Analyze algorithm consistency across studies
+consistency = combined_df.pivot_table(
+    index=['author_label', 'algorithm_label'],
+    columns='study_name',
+    values='ontology_hierarchy_similarity'
+)
+print("Algorithm consistency across studies:")
+print(consistency.describe())
+```
+
+## 🛠️ Custom Configuration
+```python
+# Custom paths and settings
+cyto = cyteonto.CyteOnto(
+    base_agent=agent,
+    embedding_model="text-embedding-ada-002",
+    embedding_provider="openai",
+    base_data_path="/custom/path/to/data",           # Custom data location
+    user_data_path="/custom/path/to/user/files",    # Custom user files location
+    enable_user_file_caching=True                    # Enable/disable caching
+)
+```
+
+### Cache Management
+```python
+# Get cache statistics
+cache_stats = cyto.get_cache_stats()
+print(f"Total cached files: {cache_stats['total_files']}")
+print(f"Total cache size: {cache_stats['total_size_mb']:.2f} MB")
+
+# Cleanup invalid cache files
+removed_count = cyto.cleanup_user_cache()
+print(f"Cleaned up {removed_count} invalid cache files")
+
+# Package-level cache cleanup
+removed_count = cyteonto.cleanup_cache(user_data_path="/path/to/user/files")
+print(f"Cleaned up {removed_count} files globally")
+```
+
+---
+
+## 📈 Understanding Results
+
+### Similarity Methods
+- **`ontology_hierarchy`**: Both labels matched to valid CL terms, similarity computed using ontology structure
+- **`string_similarity`**: One or both labels matched to non-CL terms, using embedding similarity
+- **`partial_match`**: Only one label found a valid ontology match
+- **`no_matches`**: Neither label found an ontology match
+
+### Column Definitions
+- **`author_ontology_id`**: Cell Ontology ID matched to author label (e.g., "CL:0000548")
+- **`author_embedding_similarity`**: Similarity score between author label and its matched ontology term
+- **`algorithm_ontology_id`**: Cell Ontology ID matched to algorithm label
+- **`algorithm_embedding_similarity`**: Similarity score between algorithm label and its matched ontology term
+- **`ontology_hierarchy_similarity`**: Final similarity between the two ontology terms (main metric)
+- **`similarity_method`**: Method used for computing final similarity
+
+### Interpretation Guidelines
+- **Scores > 0.8**: High similarity, algorithm label closely matches author intention
+- **Scores 0.6-0.8**: Moderate similarity, related cell types but some differences
+- **Scores < 0.6**: Low similarity, significant differences in cell type interpretation
+
+---
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+#### Setup Fails with Description Errors
+```bash
+# Error: Description Error: 'data'
+```
+**Solution**: Ensure you're using compatible model versions and check API connectivity.
+
+#### ParseError during Setup
+```bash
+# Error: ParseError: syntax error: line 1, column 0
+```
+**Solution**: The LLM is not returning valid JSON. Try a different model or check your API configuration.
+
+#### Connection Errors
+```bash
+# Error: ConnectionError: HTTPSConnectionPool...
+```
+**Solution**: Check your internet connection and API keys. CyteOnto gracefully handles PubMed API failures.
+
+#### Memory Issues with Large Datasets
+**Solution**: Process data in smaller batches or increase system memory. Use `study_name` parameter to organize large comparisons.
+
+### Debug Mode
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+
+# CyteOnto will now show detailed progress information
+await cyto.compare_batch(author_labels, algo_data, study_name="debug_run")
+```
+
+---
+
+## 📚 API Reference
+
+### Core Classes
+
+#### `CyteOnto`
+Main class for performing cell type comparisons.
+
+```python
+class CyteOnto:
+    def __init__(
+        self,
+        base_agent: Agent,
+        embedding_model: str,
+        embedding_provider: str,
+        base_data_path: str | None = None,
+        user_data_path: str | None = None,
+        enable_user_file_caching: bool = True,
+    )
+    
+    @classmethod
+    async def with_setup(cls, ...) -> "CyteOnto"
+    
+    async def compare_batch(
+        self,
+        author_labels: list[str],
+        algo_comparison_data: list[tuple[str, list[str]]],
+        study_name: str | None = None,
+    ) -> pd.DataFrame
+    
+    def get_cache_stats(self) -> dict[str, Any]
+    def cleanup_user_cache(self) -> int
+```
+
+### Utility Functions
+
+#### Setup Functions
+```python
+async def setup(
+    base_agent: Agent,
+    embedding_model: str,
+    embedding_provider: str,
+    base_data_path: str | None = None,
+    embeddings_path: str | None = None,
+    force_regenerate: bool = False,
+) -> bool
+
+async def quick_setup(
+    model_name: str = "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    embedding_model: str = "Qwen/Qwen3-Embedding-8B",
+    provider: str = "deepinfra",
+    api_key: str | None = None,
+) -> bool
+
+def cleanup_cache(user_data_path: str | None = None) -> int
+```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our contribution guidelines for details.
+
+### Development Setup
+```bash
+git clone <repository-url>
+cd CyteOnto
+uv sync --dev
+pre-commit install
+```
+<!-- 
+### Running Tests
+```bash
+uv run pytest tests/
+uv run pytest tests/ -v --cov=cyteonto
+``` -->
+
+---
+
+<!-- ## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+--- -->
+
+## Acknowledgments
+
+- **Cell Ontology (CL)**: For providing the structured vocabulary for cell types
+- **Pydantic AI**: For the excellent AI agent framework
+- **The Open Biomedical Ontologies**: For maintaining high-quality biological ontologies
+
+---
+
+*CyteOnto - Bridging AI and Cell Biology for Better Annotations* 🧬✨

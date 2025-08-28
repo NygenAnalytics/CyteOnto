@@ -1,6 +1,7 @@
 # cyteonto/main.py
 
 from pathlib import Path
+from typing import Any
 
 import anndata as ad  # type:ignore
 import numpy as np  # type:ignore
@@ -11,6 +12,7 @@ from .config import CONFIG
 from .llm_config import EMBDModelConfig
 from .logger_config import logger
 from .matcher import CyteOntoMatcher
+from .model import to_sentence
 from .pipeline import EmbeddingGenerator
 from .storage import FileManager, VectorStore
 
@@ -26,19 +28,23 @@ class CyteOnto:
         embedding_model: str,
         embedding_provider: str,
         base_data_path: str | None = None,
+        user_data_path: str | None = None,
         embeddings_file_path: Path | None = None,
+        enable_user_file_caching: bool = True,
     ) -> None:
         """
         Initialize CyteOnto for batch processing.
 
         Args:
-            base_data_path: Base path for data files
+            base_data_path: Base path for core data files (ontology files)
+            user_data_path: Base path for user-generated files
             base_agent: Agent for text generation
             embedding_model: Embedding model name
             embedding_provider: Embedding provider
-            embeddings_file_path: Custom path to embeddings file
+            embeddings_file_path: Custom path to ontology embeddings file
+            enable_user_file_caching: Enable caching for user-generated files
         """
-        self.file_manager = FileManager(base_data_path)
+        self.file_manager = FileManager(base_data_path, user_data_path)
         self.vector_store = VectorStore()
 
         self.author_descriptions: list[str] | None = None
@@ -47,8 +53,9 @@ class CyteOnto:
         self.base_agent = base_agent
         self.embedding_model = embedding_model
         self.embedding_provider = embedding_provider
+        self.enable_user_file_caching = enable_user_file_caching
 
-        # Determine embeddings file path
+        # Determine ontology embeddings file path
         if embeddings_file_path:
             self.embeddings_file_path = embeddings_file_path
         else:
@@ -73,6 +80,128 @@ class CyteOnto:
             f"CyteOnto initialized with models: text='{self.base_agent.model.model_name}', embedding='{self.embedding_model}'"  # type: ignore
         )
 
+    @classmethod
+    async def with_setup(
+        cls,
+        base_agent: Agent,
+        embedding_model: str,
+        embedding_provider: str,
+        base_data_path: str | None = None,
+        user_data_path: str | None = None,
+        embeddings_file_path: Path | None = None,
+        descriptions_file_path: Path | None = None,
+        enable_user_file_caching: bool = True,
+        force_regenerate: bool = False,
+    ) -> "CyteOnto":
+        """
+        Create CyteOnto instance with automatic setup.
+
+        Args:
+            base_agent: Agent for text generation
+            embedding_model: Embedding model name
+            embedding_provider: Embedding provider
+            base_data_path: Base path for core data files
+            user_data_path: Base path for user-generated files
+            embeddings_file_path: Custom path to ontology embeddings file
+            descriptions_file_path: Custom path to ontology descriptions file
+            enable_user_file_caching: Enable caching for user-generated files
+            force_regenerate: Force regeneration of embeddings even if they exist
+
+        Returns:
+            Initialized CyteOnto instance with setup completed
+        """
+        from .setup import CyteOntoSetup
+
+        # Initialize CyteOnto instance
+        cyto = cls(
+            base_agent=base_agent,
+            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
+            base_data_path=base_data_path,
+            user_data_path=user_data_path,
+            embeddings_file_path=embeddings_file_path,
+            enable_user_file_caching=enable_user_file_caching,
+        )
+
+        # Run setup
+        setup = CyteOntoSetup(
+            base_data_path=base_data_path
+            or str(cyto.file_manager.path_config.base_data_path),
+            base_agent=base_agent,
+            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
+        )
+
+        success = await setup.setup_embeddings(
+            base_agent=base_agent,
+            generate_embeddings=True,
+            custom_embedding_path=embeddings_file_path,
+            force_regenerate=force_regenerate,
+        )
+
+        if not success:
+            logger.error("Setup failed during CyteOnto.with_setup()")
+            raise RuntimeError("Failed to complete ontology embeddings setup")
+
+        logger.info("CyteOnto.with_setup() completed successfully")
+        return cyto
+
+    def cleanup_user_cache(self) -> int:
+        """
+        Clean up invalid user cache files.
+
+        Returns:
+            Number of files cleaned up
+        """
+        from .storage import CacheManager
+
+        cache_manager = CacheManager(self.vector_store)
+
+        # Clean up user file caches
+        user_embeddings_dir = (
+            self.file_manager.path_config.user_data_path / "embeddings"
+        )
+        cleaned = 0
+
+        for category_dir in user_embeddings_dir.glob("*"):
+            if category_dir.is_dir():
+                cleaned += cache_manager.cleanup_invalid_caches(category_dir)
+
+        return cleaned
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """
+        Get statistics about user cache files.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        from .storage import CacheManager
+
+        cache_manager = CacheManager(self.vector_store)
+        user_embeddings_dir = (
+            self.file_manager.path_config.user_data_path / "embeddings"
+        )
+
+        total_stats: dict[str, Any] = {
+            "total_files": 0,
+            "total_size_mb": 0.0,
+            "valid_files": 0,
+            "invalid_files": 0,
+            "categories": dict[str, Any](),
+        }
+
+        for category_dir in user_embeddings_dir.glob("*"):
+            if category_dir.is_dir():
+                category_stats = cache_manager.get_cache_stats(category_dir)
+                total_stats["categories"][category_dir.name] = category_stats
+                total_stats["total_files"] += category_stats["total_files"]
+                total_stats["total_size_mb"] += category_stats["total_size_mb"]
+                total_stats["valid_files"] += category_stats["valid_files"]
+                total_stats["invalid_files"] += category_stats["invalid_files"]
+
+        return total_stats
+
     def _get_embd_model_config(self) -> EMBDModelConfig:
         """Get embedding model configuration."""
         if self._embd_model_config is None:
@@ -91,33 +220,46 @@ class CyteOnto:
         self,
         author_labels: list[str],
         algorithm_labels: list[str],
-    ) -> list[float]:
+        algorithm_name: str = "algorithm",
+        study_name: str | None = None,
+    ) -> list[dict]:
         """
-        Compare a single pair of author vs algorithm labels.
+        Compare a single pair of author vs algorithm labels with detailed results.
 
         Args:
             author_labels: Author (reference) cell type labels from cell ontology
             algorithm_labels: Algorithm (predicted) cell type labels from cell ontology
+            algorithm_name: Name of the algorithm (for file naming and caching)
+            study_name: Name of the study for organizing files (optional)
 
         Returns:
-            List of ontology similarities
+            List of detailed comparison dictionaries
         """
+        study_info = f" (study: {study_name})" if study_name else ""
         logger.info(
-            f"Comparing {len(author_labels)} author vs {len(algorithm_labels)} algorithm labels"
+            f"Detailed comparison: {len(author_labels)} author vs {len(algorithm_labels)} algorithm labels for '{algorithm_name}'{study_info}"
         )
 
-        # Generate embeddings for algorithm labels
+        # Generate proper file paths
         embd_config = self._get_embd_model_config()
+        text_model_name = self.base_agent.model.model_name  # type: ignore
 
+        # Generate author embeddings with proper paths
+        author_embeddings_path = self.file_manager.get_user_embeddings_path(
+            "author", text_model_name, self.embedding_model, "author", study_name
+        )
+        author_descriptions_path = self.file_manager.get_user_descriptions_path(
+            "author", text_model_name, "author", study_name
+        )
+
+        # Load cached descriptions if available
         if self.author_descriptions is None:
-            # try loading the file
             author_descriptions_dict = self.vector_store.load_descriptions(
-                Path("author_descriptions.json")
+                author_descriptions_path
             )
-
             if author_descriptions_dict:
                 self.author_descriptions = [
-                    x.to_sentence() for x in author_descriptions_dict.values()
+                    to_sentence(x) for x in author_descriptions_dict.values()
                 ]
 
         author_embeddings_result = (
@@ -126,26 +268,43 @@ class CyteOnto:
                 embd_config,
                 base_agent=self.base_agent,
                 descriptions=self.author_descriptions,
-                filename_descriptions="author_descriptions.json",
-                filename_embeddings="author_embeddings.npz",
+                identifier="author",
+                embeddings_file_path=author_embeddings_path,
+                descriptions_file_path=author_descriptions_path,
+                use_cache=self.enable_user_file_caching,
             )
         )
 
         if author_embeddings_result:
             self.author_embeddings, _ = author_embeddings_result  # type: ignore
 
+        # Generate algorithm embeddings with algorithm-specific paths
+        algorithm_embeddings_path = self.file_manager.get_user_embeddings_path(
+            algorithm_name,
+            text_model_name,
+            self.embedding_model,
+            "algorithms",
+            study_name,
+        )
+        algorithm_descriptions_path = self.file_manager.get_user_descriptions_path(
+            algorithm_name, text_model_name, "algorithms", study_name
+        )
+
         algorithm_embeddings_result = (
             await self.embedding_generator.generate_user_embeddings(
                 algorithm_labels,
                 embd_config,
                 base_agent=self.base_agent,
-                filename_descriptions="algorithm_descriptions.json",
-                filename_embeddings="algorithm_embeddings.npz",
+                identifier=algorithm_name,
+                embeddings_file_path=algorithm_embeddings_path,
+                descriptions_file_path=algorithm_descriptions_path,
+                use_cache=self.enable_user_file_caching,
             )
         )
         if algorithm_embeddings_result:
             algorithm_embeddings, _ = algorithm_embeddings_result  # type: ignore
 
+        # Get detailed matches with similarity scores
         author_matches = self.matcher.match_embeddings_to_ontology(
             self.author_embeddings,  # type: ignore
             min_similarity=0.1,
@@ -155,74 +314,150 @@ class CyteOnto:
             min_similarity=0.1,
         )
 
-        # Get ontology IDs for matched terms
-        author_ontology_ids = []
-        for match in author_matches:
-            if match:
-                author_ontology_ids.append(match["ontology_id"])
+        # Prepare detailed results
+        detailed_results = []
+
+        for i, (author_label, algorithm_label) in enumerate(
+            zip(author_labels, algorithm_labels)
+        ):
+            # Get author match details
+            author_match = author_matches[i] if i < len(author_matches) else None
+            author_ontology_id = author_match["ontology_id"] if author_match else None
+            author_embedding_similarity = (
+                author_match["similarity"] if author_match else 0.0
+            )
+
+            # Get algorithm match details
+            algorithm_match = (
+                algorithm_matches[i] if i < len(algorithm_matches) else None
+            )
+            algorithm_ontology_id = (
+                algorithm_match["ontology_id"] if algorithm_match else None
+            )
+            algorithm_embedding_similarity = (
+                algorithm_match["similarity"] if algorithm_match else 0.0
+            )
+
+            # Compute ontology hierarchy similarity
+            ontology_hierarchy_similarity = 0.0
+            similarity_method = "no_matches"
+
+            if author_ontology_id and algorithm_ontology_id:
+                ontology_similarities = self.matcher.compute_ontology_similarity(
+                    [author_ontology_id], [algorithm_ontology_id]
+                )
+                ontology_hierarchy_similarity = (
+                    ontology_similarities[0] if ontology_similarities else 0.0
+                )
+                similarity_method = (
+                    "ontology_hierarchy"
+                    if author_ontology_id.startswith("CL:")
+                    and algorithm_ontology_id.startswith("CL:")
+                    else "string_similarity"
+                )
+            elif not author_ontology_id and not algorithm_ontology_id:
+                similarity_method = "no_matches"
             else:
-                author_ontology_ids.append(None)
+                similarity_method = "partial_match"
 
-        algorithm_ontology_ids = []
-        for match in algorithm_matches:
-            if match:
-                algorithm_ontology_ids.append(match["ontology_id"])
-            else:
-                algorithm_ontology_ids.append(None)
+            detailed_results.append(
+                {
+                    "author_label": author_label,
+                    "algorithm_label": algorithm_label,
+                    "author_ontology_id": author_ontology_id,
+                    "author_embedding_similarity": round(
+                        author_embedding_similarity, 4
+                    ),
+                    "algorithm_ontology_id": algorithm_ontology_id,
+                    "algorithm_embedding_similarity": round(
+                        algorithm_embedding_similarity, 4
+                    ),
+                    "ontology_hierarchy_similarity": round(
+                        ontology_hierarchy_similarity, 4
+                    ),
+                    "similarity_method": similarity_method,
+                    "study_name": study_name,
+                    "pair_index": i,
+                }
+            )
 
-        ontology_similarities = self.matcher.compute_ontology_similarity(
-            author_ontology_ids, algorithm_ontology_ids
-        )
-
-        logger.info(f"Computed similarities: ontology={len(ontology_similarities)}")
-        return ontology_similarities
+        logger.info(f"Generated detailed results for {len(detailed_results)} pairs")
+        return detailed_results
 
     async def compare_batch(
         self,
         author_labels: list[str],
         algo_comparison_data: list[tuple[str, list[str]]],
+        study_name: str | None = None,
     ) -> pd.DataFrame:
         """
-        Perform batch comparisons between multiple algorithm results.
+        Perform detailed batch comparisons between multiple algorithm results.
 
         Args:
             author_labels: Author (reference) cell type labels from cell ontology
             algo_comparison_data: List of (algorithm_name, algorithm_labels) tuples
+            study_name: Name of the study for organizing files (optional)
 
         Returns:
-            DataFrame with comparison results
+            DataFrame with detailed comparison results including:
+            - algorithm: Algorithm name
+            - author_label: Original author label
+            - algorithm_label: Original algorithm label
+            - author_ontology_id: Matched ontology ID for author label
+            - author_embedding_similarity: Similarity between author label and its ontology match
+            - algorithm_ontology_id: Matched ontology ID for algorithm label
+            - algorithm_embedding_similarity: Similarity between algorithm label and its ontology match
+            - ontology_hierarchy_similarity: Final similarity between the two ontology terms
+            - similarity_method: Method used for final similarity computation
+            - study_name: Name of the study (if provided)
+            - pair_index: Index of the pair
         """
         logger.info(
-            f"Starting batch comparison for {len(algo_comparison_data)} algorithms"
+            f"Starting detailed batch comparison for {len(algo_comparison_data)} algorithms"
         )
 
-        results = []
+        all_results = []
 
         for algorithm_name, algorithm_labels in algo_comparison_data:
             logger.info(f"Processing algorithm: {algorithm_name}")
 
-            ontology_sims = await self.compare_single_pair(
-                author_labels, algorithm_labels
+            detailed_results = await self.compare_single_pair(
+                author_labels, algorithm_labels, algorithm_name, study_name
             )
 
-            # Create result rows
-            for i, (author_label, algo_label) in enumerate(
-                zip(author_labels, algorithm_labels)
-            ):
-                ontology_sim = ontology_sims[i] if i < len(ontology_sims) else 0.0
+            # Add algorithm name to each result
+            for result in detailed_results:
+                result["algorithm"] = algorithm_name
+                all_results.append(result)
 
-                results.append(
-                    {
-                        "algorithm": algorithm_name,
-                        "author_label": author_label,
-                        "algorithm_label": algo_label,
-                        "ontology_similarity": ontology_sim,
-                        "pair_index": i,
-                    }
-                )
+        # Create DataFrame with proper column ordering
+        results_df = pd.DataFrame(all_results)
 
-        results_df = pd.DataFrame(results)
-        logger.info(f"Batch comparison completed: {len(results_df)} comparisons")
+        # Reorder columns for better readability
+        column_order = [
+            "study_name",
+            "algorithm",
+            "pair_index",
+            "author_label",
+            "algorithm_label",
+            "author_ontology_id",
+            "author_embedding_similarity",
+            "algorithm_ontology_id",
+            "algorithm_embedding_similarity",
+            "ontology_hierarchy_similarity",
+            "similarity_method",
+        ]
+
+        # Only include columns that exist (in case of future changes)
+        available_columns = [col for col in column_order if col in results_df.columns]
+        results_df = results_df[available_columns]
+
+        logger.info(
+            f"Detailed batch comparison completed: {len(results_df)} comparisons"
+        )
+        logger.info(
+            f"Similarity methods used: {results_df['similarity_method'].value_counts().to_dict()}"
+        )
 
         return results_df
 

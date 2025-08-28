@@ -24,7 +24,7 @@ def get_descriptor_agent(base_agent: Agent) -> Agent:
         base_agent.model,
         deps_type=None,
         output_type=CellDescription,
-        name="CellDescriptorAgent",
+        name="CellDescriptionAgent",
     )  # type: ignore
 
     agent.tool_plain(get_pubmed_abstracts, **AGENT_CONFIG.TOOL_DEFAULT_SETTINGS)
@@ -43,10 +43,36 @@ def get_description_prompt(data: str) -> str:
         DO NOT use the get_pubmed_abstracts tool more than {max_calls_get_pubmed_abstracts} times
 
         # TASK
-        Given a user-supplied label for a cell type, produce a structured CellDescription object. You can use PubMed abstracts to help you understand the label.
+        Given a user-supplied label for a cell type, produce a structured CellDescription as JSON. 
+        You can optionally use PubMed abstracts to help you understand the label, but if PubMed is unavailable, generate comprehensive descriptions based on your knowledge of cell biology.
 
-        # IMPORTANT NOTE
-        Provide a detailed descriptive name of the cell type including its function, marker genes, disease relevance and developmental stage.
+        # OUTPUT FORMAT
+        Return a JSON object with exactly these fields:
+        {{
+            "initialLabel": "string - the original cell type label",
+            "descriptiveName": "string - a detailed descriptive name",
+            "function": "string - the primary function of this cell type",
+            "markerGenes": ["array", "of", "marker", "gene", "names"],
+            "diseaseRelevance": "string - relevance to diseases",
+            "developmentalStage": "string - developmental stage information"
+        }}
+
+        # EXAMPLE OUTPUT
+        {{
+            "initialLabel": "T cell",
+            "descriptiveName": "CD4+ helper T lymphocyte",
+            "function": "Coordinates immune responses by secreting cytokines and activating other immune cells",
+            "markerGenes": ["CD4", "CD3", "TCR", "CD28"],
+            "diseaseRelevance": "Critical in autoimmune diseases, immunodeficiency, and cancer immunotherapy",
+            "developmentalStage": "Mature adaptive immune cell derived from thymic precursors"
+        }}
+
+        # IMPORTANT NOTES
+        - Return ONLY the JSON object, no additional text
+        - Ensure all fields are filled with relevant information based on your cell biology knowledge
+        - If PubMed abstracts are unavailable, use your expertise to provide comprehensive details
+        - If information is uncertain, provide reasonable scientific placeholders
+        - markerGenes should be an array of strings with known marker genes for this cell type
         
         # INPUT DATA
         {data}
@@ -54,7 +80,7 @@ def get_description_prompt(data: str) -> str:
         .strip()
         .format(
             max_calls_get_pubmed_abstracts=AGENT_CONFIG.MAX_TOOL_CALLS,
-            input_data=data,
+            data=data,
         )
     )
     return prompt
@@ -85,9 +111,16 @@ async def generate_descriptions(
 
     # Process descriptions with concurrency control
     semaphore = asyncio.Semaphore(AGENT_CONFIG.MAX_CONCURRENT_DESCRIPTIONS)
+    completed_count = 0
+    total_count = len(terms)
+    progress_lock = asyncio.Lock()
 
-    async def generate_single_description(index: int, label: str) -> CellDescription:
+    async def generate_single_description(
+        index: int, label: str
+    ) -> tuple[int, CellDescription]:
         """Generate description for a single cell type"""
+        nonlocal completed_count
+
         async with semaphore:
             description = await describe_cell_type(
                 base_agent=base_agent,
@@ -100,7 +133,15 @@ async def generate_descriptions(
                     f"[{index + 1}] Failed to generate description for: {label}"
                 )
                 description = CellDescription.get_blank()  # Fallback
-            return description
+
+            # Update progress safely
+            async with progress_lock:
+                completed_count += 1
+                logger.info(
+                    f"Description progress: {completed_count}/{total_count} completed ({completed_count / total_count * 100:.1f}%) - '{label}'"
+                )
+
+            return (index, description)
 
     # Create concurrent tasks for all terms
     tasks = []
@@ -108,21 +149,21 @@ async def generate_descriptions(
         task = generate_single_description(i, label)
         tasks.append(task)
 
-    # Execute all tasks concurrently
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info(
+        f"Starting generation of {total_count} descriptions with max concurrency: {AGENT_CONFIG.MAX_CONCURRENT_DESCRIPTIONS}"
+    )
 
-    # Process results and maintain order
+    # Execute all tasks concurrently with progress tracking
     descriptions: list[CellDescription] = [
         CellDescription.get_blank() for _ in range(len(terms))
     ]
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"Task {i} failed with exception: {result}")
-            # Keep the blank placeholder for this index
-        elif isinstance(result, CellDescription):
-            descriptions[i] = result
-        else:
-            logger.error(f"Task {i} returned unexpected result format: {type(result)}")
+
+    for coro in asyncio.as_completed(tasks):
+        try:
+            index, description = await coro
+            descriptions[index] = description
+        except Exception as e:
+            logger.error(f"Description task failed with exception: {e}")
 
     # Filter out blank placeholders and return only successful ones
     successful_descriptions = [

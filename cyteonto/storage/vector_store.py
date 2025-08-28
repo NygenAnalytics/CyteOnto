@@ -1,6 +1,7 @@
 # cyteonto/storage/vector_store.py
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,7 @@ class VectorStore:
                         if len(embeddings) > 0
                         else 0,
                         "version": "1.0",
+                        "timestamp": datetime.now().isoformat(),
                     },
                     dtype=object,
                 ),
@@ -106,9 +108,10 @@ class VectorStore:
         """
         try:
             filepath.parent.mkdir(parents=True, exist_ok=True)
+            descriptions_save = {k: v.model_dump() for k, v in descriptions.items()}
 
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(descriptions, f, indent=4, ensure_ascii=False)
+                json.dump(descriptions_save, f, indent=4, ensure_ascii=False)
 
             logger.info(f"Saved {len(descriptions)} descriptions to {filepath}")
             return True
@@ -136,7 +139,9 @@ class VectorStore:
                 descriptions = json.load(f)
 
             logger.info(f"Loaded {len(descriptions)} descriptions from {filepath}")
-            return descriptions
+            return {
+                k: CellDescription.model_validate(v) for k, v in descriptions.items()
+            }
 
         except Exception as e:
             logger.error(f"Failed to load descriptions from {filepath}: {e}")
@@ -150,7 +155,7 @@ class VectorStore:
         try:
             # Try to load and validate basic structure
             data = np.load(filepath, allow_pickle=True)
-            required_keys = ["embeddings", "labels", "ontology_ids"]
+            required_keys = ["embeddings", "ontology_ids", "metadata"]
             return all(key in data for key in required_keys)
         except Exception as e:
             logger.error(f"Invalid embedding file {filepath}: {e}")

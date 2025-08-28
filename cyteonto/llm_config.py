@@ -18,9 +18,7 @@ from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_chain,
-    wait_fixed,
-    wait_random,
+    wait_exponential,
 )
 
 from .logger_config import logger
@@ -33,10 +31,10 @@ class AgentConfig:
     }
     AGENT_DEFAULT_USAGE_LIMITS: UsageLimits = UsageLimits(
         request_limit=50,
-        input_tokens_limit=20_000,
+        input_tokens_limit=50_000,
     )
     MAX_TOOL_CALLS: int = 3
-    MAX_CONCURRENT_DESCRIPTIONS: int = 10
+    MAX_CONCURRENT_DESCRIPTIONS: int = 200
 
 
 AGENT_CONFIG = AgentConfig()
@@ -63,7 +61,7 @@ class EMBDModelConfig(BaseModel):
         default=None, description="Extra body for the embedding model"
     )
     maxConcEmbed: int = Field(
-        default=10,
+        default=200,
         description="Maximum concurrent embedding requests to avoid rate limits.",
     )
 
@@ -110,9 +108,9 @@ class AgentUsage(BaseModel):
 
 def get_embd_param(embd_model_config: EMBDModelConfig) -> dict:
     provider_url_map = {
-        "deepinfra": "https://api.deepinfra.com/v1/openai",
-        "ollama": "http://localhost:11434/v1/",
-        "openai": "https://api.openai.com/v1/",
+        "deepinfra": "https://api.deepinfra.com/v1/openai/embeddings",
+        "ollama": "http://localhost:11434/api/embed",
+        "openai": "https://api.openai.com/v1/embeddings/",
         "google": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
     }
     provider_headers = {
@@ -198,12 +196,7 @@ async def agent_run[DepsType, ResultType](
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_chain(
-            wait_fixed(5),  # wait fixed for 5 seconds
-            # wait a 5+x random seconds twice
-            wait_fixed(5) + wait_random(0, 5),
-            wait_fixed(5) + wait_random(0, 10),
-        ),
+        wait=wait_exponential(min=1, max=10),
         retry=retry_if_exception_type(
             (ModelHTTPError, UnexpectedModelBehavior, ValidationError)
         ),
