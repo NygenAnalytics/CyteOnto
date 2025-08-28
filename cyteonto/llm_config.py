@@ -34,7 +34,7 @@ class AgentConfig:
         input_tokens_limit=50_000,
     )
     MAX_TOOL_CALLS: int = 3
-    MAX_CONCURRENT_DESCRIPTIONS: int = 200
+    MAX_CONCURRENT_DESCRIPTIONS: int = 10
 
 
 AGENT_CONFIG = AgentConfig()
@@ -61,7 +61,7 @@ class EMBDModelConfig(BaseModel):
         default=None, description="Extra body for the embedding model"
     )
     maxConcEmbed: int = Field(
-        default=200,
+        default=10,
         description="Maximum concurrent embedding requests to avoid rate limits.",
     )
 
