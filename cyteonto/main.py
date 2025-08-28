@@ -89,7 +89,6 @@ class CyteOnto:
         base_data_path: str | None = None,
         user_data_path: str | None = None,
         embeddings_file_path: Path | None = None,
-        descriptions_file_path: Path | None = None,
         enable_user_file_caching: bool = True,
         force_regenerate: bool = False,
     ) -> "CyteOnto":
@@ -103,7 +102,6 @@ class CyteOnto:
             base_data_path: Base path for core data files
             user_data_path: Base path for user-generated files
             embeddings_file_path: Custom path to ontology embeddings file
-            descriptions_file_path: Custom path to ontology descriptions file
             enable_user_file_caching: Enable caching for user-generated files
             force_regenerate: Force regeneration of embeddings even if they exist
 

@@ -109,6 +109,25 @@ flowchart TD
 
 ## ⚡ Quick Start
 
+### 0. Precomputed Cell Ontology Descriptions and Embeddings
+
+We have already computed cell ontology descriptions using `DeepSeek-V3` and embeddings using `Qwen3-Embedding-8B` models. 
+
+To download and store at appropriate folder use the following command:
+
+```bash
+cd CyteOnto
+mkdir -p cyteonto/data/embedding/descriptions
+mkdir -p cyteonto/data/embedding/cell_ontology
+# Descriptions
+wget -O cyteonto/data/embedding/descriptions/descriptions_deepseek-ai-DeepSeek-V3.json https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/descriptions/descriptions_deepseek-ai-DeepSeek-V3.json    
+# Embeddings
+wget -O cyteonto/data/embedding/cell_ontology/embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/embeddings/embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz 
+```
+
+This will download the `descriptions_deepseek-ai-DeepSeek-V3.json` file and save it in `./cyteonto/data/embedding/descriptions` and the `embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz` file at `cyteonto/data/embedding/cell_ontology`.
+
+
 ### 1. Basic Setup
 ```python
 import cyteonto
@@ -119,7 +138,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 # Initialize your LLM agent
 model = OpenAIModel(
-    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "deepseek-ai/DeepSeek-V3",
     provider=OpenAIProvider(
         base_url="https://api.deepinfra.com/v1/openai",
         api_key=os.getenv("DEEPINFRA_API_KEY"),
@@ -128,6 +147,8 @@ model = OpenAIModel(
 agent = Agent(model)
 
 # One-time setup: Generate ontology embeddings
+# If you have downloaded and stored the embeddings file in correct location, 
+# this step will only perform file checks
 await cyteonto.setup(
     base_agent=agent,
     embedding_model="Qwen/Qwen3-Embedding-8B",
@@ -140,7 +161,7 @@ await cyteonto.setup(
 ### 2. Initialize CyteOnto
 ```python
 # Create CyteOnto instance
-cyto = cyteonto.CyteOnto.with_setup(
+cyto = cyteonto.CyteOnto(
     base_agent=agent,
     embedding_model="Qwen/Qwen3-Embedding-8B", 
     embedding_provider="deepinfra"
@@ -163,6 +184,9 @@ results_df = await cyto.compare_batch(
     ],
     study_name="liver_dataset_2024"  # Organize by study
 )
+# The above step will generate descriptions and embeddings for author and algorithm labels,
+# map to closest ontology term and 
+# compute ontology-based similarity
 
 print(results_df)
 ```
@@ -423,7 +447,7 @@ async def setup(
 ) -> bool
 
 async def quick_setup(
-    model_name: str = "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    model_name: str = "deepseek-ai/DeepSeek-V3",
     embedding_model: str = "Qwen/Qwen3-Embedding-8B",
     provider: str = "deepinfra",
     api_key: str | None = None,
