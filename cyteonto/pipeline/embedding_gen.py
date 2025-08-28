@@ -7,9 +7,9 @@ from pydantic_ai import Agent
 
 from ..llm_config import EMBDModelConfig
 from ..logger_config import logger
-from ..model import CellDescription
+from ..model import CellDescription, to_sentence
 from ..models.embeddings import generate_embeddings
-from ..storage import VectorStore
+from ..storage import CacheManager, VectorStore
 from .description_gen import DescriptionGenerator
 
 
@@ -24,6 +24,7 @@ class EmbeddingGenerator:
             vector_store: VectorStore instance for saving embeddings
         """
         self.vector_store = vector_store
+        self.cache_manager = CacheManager(vector_store)
 
     async def generate_ontology_embeddings(
         self,
@@ -47,8 +48,11 @@ class EmbeddingGenerator:
         )
 
         # Prepare data for embedding
-        texts_to_embed = [x.to_sentence() for x in descriptions.values()]
         ontology_ids = list(descriptions.keys())
+        texts_to_embed = [
+            to_sentence(CellDescription.model_validate(descriptions[ontology_id]))
+            for ontology_id in ontology_ids
+        ]
 
         # Generate embeddings
         # No need to batch, semaphore will handle!
@@ -107,8 +111,10 @@ class EmbeddingGenerator:
         embd_model_config: EMBDModelConfig,
         base_agent: Agent | None = None,
         descriptions: list[str] | None = None,
-        filename_descriptions: str = "author_descriptions.json",
-        filename_embeddings: str = "author_embeddings.npz",
+        identifier: str = "user_labels",
+        embeddings_file_path: Path | None = None,
+        descriptions_file_path: Path | None = None,
+        use_cache: bool = True,
     ) -> tuple[np.ndarray, list[str]] | None:
         """
         Generate embeddings for user-provided cell labels.
@@ -118,11 +124,46 @@ class EmbeddingGenerator:
             user_labels: List of user cell type labels
             embd_model_config: Embedding model configuration
             base_agent: Optional agent for generating descriptions
+            descriptions: Pre-computed descriptions to use (optional)
+            identifier: Identifier for this set of labels (e.g., algorithm name)
+            embeddings_file_path: Custom path for embeddings file
+            descriptions_file_path: Custom path for descriptions file
+            use_cache: Whether to use cached files if available
 
         Returns:
             Tuple of (embeddings, labels) or None if failed
         """
-        logger.info(f"Generating embeddings for {len(user_labels)} user labels")
+        logger.info(
+            f"Generating embeddings for {len(user_labels)} user labels with identifier: {identifier}"
+        )
+
+        # Determine file paths - need FileManager access for this
+        if embeddings_file_path is None or descriptions_file_path is None:
+            # We need access to FileManager to generate proper paths
+            # This will be handled by the calling code (CyteOnto class)
+            logger.warning("File paths not provided, using current working directory")
+            if embeddings_file_path is None:
+                embeddings_file_path = Path(f"{identifier}_embeddings.npz")
+            if descriptions_file_path is None:
+                descriptions_file_path = Path(f"{identifier}_descriptions.json")
+
+        # Check for cached files first if use_cache is enabled
+        if use_cache:
+            model_config = {
+                "embedding_model": embd_model_config.model,
+                "embedding_provider": embd_model_config.provider,
+                "text_model": base_agent.model.model_name if base_agent else "none",  # type: ignore
+            }
+
+            cached_result = self.cache_manager.load_cached_embeddings(
+                embeddings_file_path, user_labels, model_config
+            )
+            if cached_result is not None:
+                cached_embeddings, cached_labels = cached_result
+                logger.info(
+                    f"Using validated cached embeddings from {embeddings_file_path}"
+                )
+                return cached_embeddings, cached_labels
 
         texts_to_embed = user_labels.copy()
 
@@ -137,10 +178,10 @@ class EmbeddingGenerator:
             desc_gen = DescriptionGenerator(self.vector_store)
 
             results = await desc_gen.generate_descriptions_for_terms(
-                base_agent, user_labels, Path(filename_descriptions)
+                base_agent, user_labels, descriptions_file_path
             )
             if results:
-                texts_to_embed = [x.to_sentence() for x in results.values()]
+                texts_to_embed = [to_sentence(x) for x in results.values()]
             else:
                 logger.error("Failed to generate descriptions")
                 return None
@@ -149,13 +190,27 @@ class EmbeddingGenerator:
         try:
             embeddings = await generate_embeddings(texts_to_embed, embd_model_config)
             if embeddings is not None:
-                # save embeddings to file
-                self.vector_store.save_embeddings(
+                # Save embeddings with metadata using CacheManager
+                model_config = {
+                    "embedding_model": embd_model_config.model,
+                    "embedding_provider": embd_model_config.provider,
+                    "text_model": base_agent.model.model_name if base_agent else "none",  # type: ignore
+                }
+
+                success = self.cache_manager.save_embeddings_with_metadata(
                     embeddings=embeddings,
-                    ontology_ids=[f"term:{idx}" for idx in range(len(texts_to_embed))],
-                    filepath=Path(filename_embeddings),
+                    labels=user_labels,
+                    cache_file_path=embeddings_file_path,
+                    model_config=model_config,
                 )
-                logger.info(f"Generated embeddings for {len(embeddings)} user labels")
+
+                if success:
+                    logger.info(
+                        f"Generated and saved {len(embeddings)} embeddings with metadata to {embeddings_file_path}"
+                    )
+                else:
+                    logger.error("Failed to save embeddings with metadata")
+
                 return embeddings, texts_to_embed
             else:
                 logger.error("Failed to generate user embeddings")

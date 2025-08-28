@@ -27,10 +27,10 @@ class CellDescription(BaseModel):
         # PLACEHOLDER
         return cls.get_blank()
 
-    @classmethod
-    def to_sentence(cls) -> str:
-        return (
-            f"{cls.initialLabel} is {cls.descriptiveName}. {cls.function}. "
-            f"{cls.diseaseRelevance}. {cls.developmentalStage}. "
-            f"The marker genes are {', '.join(cls.markerGenes)}."
-        )
+
+def to_sentence(CellDescription: CellDescription) -> str:
+    return (
+        f"{CellDescription.initialLabel} is {CellDescription.descriptiveName}. {CellDescription.function}. "
+        f"{CellDescription.diseaseRelevance}. {CellDescription.developmentalStage}. "
+        f"The marker genes are {', '.join(CellDescription.markerGenes)}."
+    )

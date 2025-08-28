@@ -35,7 +35,7 @@ class CyteOntoSetup:
         self.vector_store = VectorStore()
 
         # Model configuration
-        self.base_agent = base_agent.model.model_name  # type: ignore
+        self.base_agent = base_agent
         self.embedding_model = embedding_model
         self.embedding_provider = embedding_provider
 
@@ -47,7 +47,7 @@ class CyteOntoSetup:
         self.embedding_generator = EmbeddingGenerator(self.vector_store)
 
         logger.info(
-            f"Setup initialized with base_agent='{self.base_agent}', embedding_model='{self.embedding_model}'"
+            f"Setup initialized with base_agent='{self.base_agent.model.model_name}', embedding_model='{self.embedding_model}'"  # type: ignore
         )
 
     def validate_core_files(self) -> bool:
@@ -251,7 +251,7 @@ class CyteOntoSetup:
         core_files = self.file_manager.validate_data_files()
 
         return {
-            "base_agent": self.base_agent,
+            "base_agent": self.base_agent.model.model_name,  # type: ignore
             "embedding_model": self.embedding_model,
             "embedding_provider": self.embedding_provider,
             "embeddings_path": str(embeddings_path),

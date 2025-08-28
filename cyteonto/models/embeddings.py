@@ -78,17 +78,30 @@ async def generate_embeddings(
 
     # Process one sentence per request with concurrency control
     semaphore = asyncio.Semaphore(embd_model_config.maxConcEmbed)
+    completed_count = 0
+    total_count = len(texts)
+    progress_lock = asyncio.Lock()
 
     async def generate_single_embedding(
         text: str, index: int
     ) -> tuple[int, list[float] | None] | None:
         """Generate embedding for a single text"""
+        nonlocal completed_count
+
         async with semaphore:
             embedding = await query_embd_model(text, embd_model_config)
             if not embedding:
                 logger.error(
-                    f"[{index + 1}] Failed to generate embedding for text: {text}"
+                    f"[{index + 1}] Failed to generate embedding for text: {text[:50]}..."
                 )
+
+            # Update progress safely
+            async with progress_lock:
+                completed_count += 1
+                logger.info(
+                    f"Embedding progress: {completed_count}/{total_count} completed ({completed_count / total_count * 100:.1f}%)"
+                )
+
             return (index, embedding)
 
     # Create concurrent tasks for all texts
@@ -97,20 +110,24 @@ async def generate_embeddings(
         task = generate_single_embedding(text, i)
         tasks.append(task)
 
-    # Execute all tasks concurrently
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info(
+        f"Starting generation of {total_count} embeddings with max concurrency: {embd_model_config.maxConcEmbed}"
+    )
 
-    # Process results and maintain order
+    # Execute all tasks concurrently with progress tracking
     embeddings: list[list[float]] = [[] for _ in range(len(texts))]
-    for result in results:
-        if isinstance(result, Exception):
-            logger.error(f"Task failed with exception: {result}")
-            return None
-        elif result is not None:
-            index, embedding = result  # type:ignore
-            embeddings[index] = embedding  # type:ignore
-        else:
-            logger.error("Failed to generate embedding for one or more texts")
+
+    for coro in asyncio.as_completed(tasks):
+        try:
+            result = await coro
+            if result is not None:
+                index, embedding = result  # type:ignore
+                embeddings[index] = embedding  # type:ignore
+            else:
+                logger.error("Failed to generate embedding for one or more texts")
+                return None
+        except Exception as e:
+            logger.error(f"Embedding task failed with exception: {e}")
             return None
 
     # Check if all embeddings were generated
