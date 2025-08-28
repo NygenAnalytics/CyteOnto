@@ -127,6 +127,14 @@ wget -O cyteonto/data/embedding/cell_ontology/embeddings_deepseek-ai-DeepSeek-V3
 
 This will download the `descriptions_deepseek-ai-DeepSeek-V3.json` file and save it in `./cyteonto/data/embedding/descriptions` and the `embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz` file at `cyteonto/data/embedding/cell_ontology`.
 
+You will also need to download the cell ontology:
+```bash
+wget -O cyteonto/data/cell_ontology/cell_to_cell_ontology.csv https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/cell_ontology/cell_to_cell_ontology.csv
+wget -O cyteonto/data/cell_ontology/cl.owl https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/cell_ontology/cl.owl
+```
+
+This will download `cell_to_cell_ontology.csv` and `cl.owl` and save them in appropriate folder. 
+
 
 ### 1. Basic Setup
 ```python
