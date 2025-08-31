@@ -31,7 +31,7 @@ class AgentConfig:
     }
     AGENT_DEFAULT_USAGE_LIMITS: UsageLimits = UsageLimits(
         request_limit=50,
-        input_tokens_limit=50_000,
+        input_tokens_limit=60_000,
     )
     MAX_TOOL_CALLS: int = 3
     MAX_CONCURRENT_DESCRIPTIONS: int = 10
