@@ -70,6 +70,8 @@ NCBI_API_KEY=your_ncbi_api_key_here             # for using pubmed tool calls
 LOGFIRE_API_KEY=your_logfire_api_key_here       # for telemetry data
 ```
 
+We used `deepinfra` as model to generate descriptions and embeddings. You can check out the models [here](https://deepinfra.com/models).
+
 ---
 
 ## 🔄 Workflow
@@ -119,16 +121,25 @@ To download and store at appropriate folder use the following command:
 cd CyteOnto
 mkdir -p cyteonto/data/embedding/descriptions
 mkdir -p cyteonto/data/embedding/cell_ontology
-# Descriptions
+
+# Kimi-K2 (Recommended)
+wget -O cyteonto/data/embedding/descriptions/descriptions_moonshotai-Kimi-K2-Instruct.json https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/descriptions/descriptions_moonshotai-Kimi-K2-Instruct.json
+wget -O cyteonto/data/embedding/cell_ontology/embeddings_moonshotai-Kimi-K2-Instruct_Qwen-Qwen3-Embedding-8B.npz https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/embeddings/embeddings_moonshotai-Kimi-K2-Instruct_Qwen-Qwen3-Embedding-8B.npz
+
+# DeepSeek-V3
 wget -O cyteonto/data/embedding/descriptions/descriptions_deepseek-ai-DeepSeek-V3.json https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/descriptions/descriptions_deepseek-ai-DeepSeek-V3.json    
-# Embeddings
 wget -O cyteonto/data/embedding/cell_ontology/embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/embeddings/embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz 
+
+# DeepSeek-V3.1
+wget -O cyteonto/data/embedding/descriptions/descriptions_deepseek-ai-DeepSeek-V3.1.json https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/descriptions/descriptions_deepseek-ai-DeepSeek-V3.1.json
+wget -O cyteonto/data/embedding/cell_ontology/embeddings_deepseek-ai-DeepSeek-V3.1_Qwen-Qwen3-Embedding-8B.npz https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/embeddings/embeddings_deepseek-ai-DeepSeek-V3.1_Qwen-Qwen3-Embedding-8B.npz
 ```
 
-This will download the `descriptions_deepseek-ai-DeepSeek-V3.json` file and save it in `./cyteonto/data/embedding/descriptions` and the `embeddings_deepseek-ai-DeepSeek-V3_Qwen-Qwen3-Embedding-8B.npz` file at `cyteonto/data/embedding/cell_ontology`.
+This will download the embeddings and descriptions in correct lodation for cyteonto.
 
 You will also need to download the cell ontology:
 ```bash
+mkdir -p cyteonto/data/cell_ontology
 wget -O cyteonto/data/cell_ontology/cell_to_cell_ontology.csv https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/cell_ontology/cell_to_cell_ontology.csv
 wget -O cyteonto/data/cell_ontology/cl.owl https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto/cell_ontology/cl.owl
 ```
@@ -137,6 +148,9 @@ This will download `cell_to_cell_ontology.csv` and `cl.owl` and save them in app
 
 
 ### 1. Basic Setup
+
+You can follow the tutorial in [tutorial.ipynb](./tutorial/tutorial.ipynb) 
+
 ```python
 import cyteonto
 import os
@@ -163,6 +177,9 @@ await cyteonto.setup(
     embedding_provider="deepinfra",
 )
 ```
+
+
+If you have hosted your models locally, you can use `ollama` as your provider. Checkout out [Pydantic AI's Model](https://ai.pydantic.dev/models/) page for additional information regarding model providers.
 
 > The description and embedding generarion step will be skipped if the files are already present for the given models. Look "File Organization" below for how the files are stored.
 
@@ -486,11 +503,11 @@ uv run pytest tests/ -v --cov=cyteonto
 
 ---
 
-<!-- ## 📄 License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
---- -->
+---
 
 ## Acknowledgments
 
