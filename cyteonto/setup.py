@@ -219,26 +219,6 @@ class CyteOntoSetup:
 
         return True
 
-    async def quick_setup(
-        self, base_agent: Agent, custom_embedding_path: Path | None = None
-    ) -> bool:
-        """
-        Quick setup that generates embeddings only if missing.
-
-        Args:
-            base_agent: Agent for generating descriptions
-            custom_embedding_path: Custom path for embedding file
-
-        Returns:
-            True if setup successful, False otherwise
-        """
-        return await self.setup_embeddings(
-            base_agent=base_agent,
-            generate_embeddings=True,
-            custom_embedding_path=custom_embedding_path,
-            force_regenerate=False,
-        )
-
     def get_setup_info(self) -> dict:
         """
         Get information about current setup state.

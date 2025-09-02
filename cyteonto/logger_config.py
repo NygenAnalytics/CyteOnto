@@ -2,18 +2,20 @@
 
 import sys
 
-import logfire
 from loguru import logger
 
 from .config import CONFIG
 
 logger.remove()
-logger.add(sys.stdout, format="{level}: {message}", level="DEBUG")
+logger.add(sys.stdout, format="{level}: {message}", level=CONFIG.LOGGING_LEVEL)
 
 try:
-    logfire.configure(
-        token=CONFIG.LOGFIRE_API_KEY, scrubbing=False, service_name="CyteOnto"
-    )
-    logger.configure(handlers=[logfire.loguru_handler()])
+    if CONFIG.LOG_FILE:
+        logger.add(
+            CONFIG.LOG_FILE,
+            format="{time} {level} {message}",
+            level=CONFIG.LOGGING_LEVEL,
+            rotation="10 MB",
+        )
 except Exception:
     pass
