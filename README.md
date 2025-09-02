@@ -149,7 +149,7 @@ We welcome contributions! Please see our contribution guidelines for details.
  
 ### Development Setup
 ```bash
-git clone <repository-url>
+git clone https://github.com/NygenAnalytics/CyteOnto.git
 cd CyteOnto
 uv sync --dev
 ```
