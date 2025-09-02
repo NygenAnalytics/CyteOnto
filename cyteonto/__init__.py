@@ -16,7 +16,6 @@ __all__ = [
     "CyteOntoSetup",
     "EMBDModelConfig",
     "setup",
-    "quick_setup",
     "cleanup_cache",
 ]
 
@@ -57,36 +56,6 @@ async def setup(
         generate_embeddings=True,
         custom_embedding_path=custom_embedding_path,
         force_regenerate=force_regenerate,
-    )
-
-
-async def quick_setup(
-    base_agent: Agent,
-    embedding_model: str,
-    embedding_provider: str,
-    base_data_path: str | None = None,
-    embeddings_path: str | None = None,
-) -> bool:
-    """
-    Quick setup that only generates embeddings if missing.
-
-    Args:
-        base_agent: Agent for text generation
-        embedding_model: Embedding model name
-        embedding_provider: Embedding provider
-        base_data_path: Base path for data files
-        embeddings_path: Custom path for embeddings file
-
-    Returns:
-        True if setup successful, False otherwise
-    """
-    return await setup(
-        base_agent=base_agent,
-        embedding_model=embedding_model,
-        embedding_provider=embedding_provider,
-        base_data_path=base_data_path,
-        embeddings_path=embeddings_path,
-        force_regenerate=False,
     )
 
 

@@ -12,9 +12,10 @@ class Config:
     API keys configuration.
     """
 
-    LOGFIRE_API_KEY = os.getenv("LOGFIRE_API_KEY")
-    NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")  # Recommended for higher rate limits
+    NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")
     EMBEDDING_MODEL_API_KEY = os.getenv("EMBEDDING_MODEL_API_KEY", "")
+    LOGGING_LEVEL = "INFO"
+    LOG_FILE = None
 
 
 CONFIG = Config()

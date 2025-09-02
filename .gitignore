@@ -3,6 +3,7 @@ __pycache__/
 tmp/
 .env
 .mypy_cache/
+.pytest_cache/
 *.csv
 *.owl
 *.npz
