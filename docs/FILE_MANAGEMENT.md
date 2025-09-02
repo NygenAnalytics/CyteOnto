@@ -26,12 +26,7 @@ cyteonto/data/
     │   │   └── algorithms/                     # Algorithm predictions
     │   │       ├── algorithm1_embeddings_model_embedding-model.npz
     │   │       └── algorithm2_embeddings_model_embedding-model.npz
-    │   ├── study2/
-    │   │   ├── author/
-    │   │   └── algorithms/
-    │   └── brain_dataset_2024/
-    │       ├── author/
-    │       └── algorithms/
+    │   └── study2/
     └── descriptions/                           # User label descriptions
         ├── study1/
         │   ├── author/
@@ -39,8 +34,7 @@ cyteonto/data/
         │   └── algorithms/
         │       ├── algorithm1_descriptions_model-name.json
         │       └── algorithm2_descriptions_model-name.json
-        ├── study2/
-        └── brain_dataset_2024/
+        └── study2/
 ```
 
 ### File Naming Conventions

@@ -31,7 +31,7 @@ For each comparison request:
 Data is organized by study to enable:
 - Clean separation between different datasets
 - Reproducible analyses
-- Efficient caching and retrieval
+- Caching and retrieval
 
 ### 4. Similarity Calculation
 
@@ -47,7 +47,7 @@ Compute final similarity between author and algorithm labels
 
 2. **String Similarity** (Fallback):
    - Used when one or both labels lack ontology matches
-   - Employs Python's SequenceMatcher for text comparison
+   - Employs Python's `SequenceMatcher` for text comparison
    - Provides basic similarity measure
 
 3. **Partial Match**:
