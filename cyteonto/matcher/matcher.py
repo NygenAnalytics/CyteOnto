@@ -141,7 +141,12 @@ class CyteOntoMatcher:
         return results
 
     def compute_ontology_similarity(
-        self, author_ontology_terms: list[str], user_ontology_terms: list[str]
+        self,
+        author_ontology_terms: list[str],
+        user_ontology_terms: list[str],
+        author_ontology_score: list[float] | None = None,
+        user_ontology_score: list[float] | None = None,
+        metric: str = "cosine_kernel",
     ) -> list[float]:
         """
         Compute ontology hierarchy-based similarity between author and user labels.
@@ -163,15 +168,38 @@ class CyteOntoMatcher:
         # Build mappings if needed
         _, label_to_ontology = extractor.build_mappings()
 
+        if metric == "cosine_ensemble" and (
+            author_ontology_score is None or user_ontology_score is None
+        ):
+            logger.error(
+                "Cosine ensemble metric requires author and user ontology scores"
+            )
+            return [0.0] * len(author_ontology_terms)
+        else:
+            # make arrays of 1.0 if scores not provided
+            if author_ontology_score is None:
+                author_ontology_score = [1.0] * len(author_ontology_terms)
+            if user_ontology_score is None:
+                user_ontology_score = [1.0] * len(user_ontology_terms)
+
         similarities = []
-        for author_label, user_label in zip(author_ontology_terms, user_ontology_terms):
+        for author_label, user_label, author_score, user_score in zip(
+            author_ontology_terms,
+            user_ontology_terms,
+            author_ontology_score,
+            user_ontology_score,
+        ):
             # Get ontology IDs for labels
             author_ontology_id = label_to_ontology.get(author_label, author_label)
             user_ontology_id = label_to_ontology.get(user_label, user_label)
 
             # Compute ontology-based similarity
             similarity = similarity_calc.compute_ontology_similarity(
-                author_ontology_id, user_ontology_id
+                author_ontology_id,
+                user_ontology_id,
+                author_score,
+                user_score,
+                metric=metric,
             )
             similarities.append(similarity)
 
