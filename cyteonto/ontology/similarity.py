@@ -43,25 +43,56 @@ class OntologySimilarity:
         # Load resources on initialization
         self._load_ontology()
         if self.embeddings_path:
+            logger.info("Trying to get embedding map")
             self._load_embeddings()
 
     def _load_ontology_robust(
-        self, ontology_url_or_path
-    ) -> tuple[Ontology, str] | tuple[None, str]:
-        """Robustly load an ontology with multiple fallback strategies."""
+        self, ontology_url_or_path, max_retries=3
+    ) -> tuple[Ontology, str]:
+        """
+        Robustly load an ontology with multiple fallback strategies.
+
+        Args:
+            ontology_url_or_path: URL or local path to ontology
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            tuple: (ontology_object, loading_method_used)
+        """
         onto = get_ontology(ontology_url_or_path)
+        # Try local-only loading
         try:
             onto.load(only_local=True)
-            logger.info("Loaded ontology using only_local=True.")
+            print(
+                "Loaded using only_local=True (some imported ontologies may be missing)"
+            )
             return onto, "local_only"
-        except Exception:
-            logger.debug("Local-only loading failed. Trying other methods.")
+        except Exception as e:
+            print(f"Local-only loading failed: {e}")
+        # Try with reload flag
         try:
             onto.load(reload=True)
-            logger.info("Loaded ontology using reload=True.")
             return onto, "reload_forced"
-        except Exception:
-            logger.debug("Forced reload failed.")
+        except Exception as e:
+            print(f"Forced reload failed: {e}")
+        # Try local with reload
+        try:
+            onto.load(only_local=True, reload=True)
+            print("Using local-only with forced reload (minimal imports)")
+            return onto, "local_reload"
+        except Exception as e:
+            print(f"All loading strategies failed: {e}")
+
+        # Last resort: Try normal loading
+        for attempt in range(max_retries):
+            try:
+                onto.load()
+                return onto, f"normal_load_attempt_{attempt + 1}"
+            except Exception as e:
+                print(f"Normal load attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    continue
+            return None, "failed"
         return None, "failed"
 
     def _load_ontology(self) -> bool:
@@ -93,9 +124,12 @@ class OntologySimilarity:
     def _load_embeddings(self):
         """Loads ontology term embeddings from an NPZ file."""
         if not self.embeddings_path:
+            logger.info("[_load_embeddings] Embedding path not found")
             return
         try:
-            logger.info(f"Loading embeddings from {self.embeddings_path}...")
+            logger.info(
+                f"[_load_embeddings] Loading embeddings from {self.embeddings_path}..."
+            )
             data = np.load(self.embeddings_path, allow_pickle=True)
             embeddings = data["embeddings"]
             labels = data["ontology_ids"]
@@ -296,7 +330,6 @@ class OntologySimilarity:
         ontology_score1: float = 1.0,
         ontology_score2: float = 1.0,
         metric: str = "cosine_kernel",
-        width: float = 0.25,
     ) -> float:
         """
         Compute similarity between two ontology terms using a specified metric.
@@ -359,10 +392,13 @@ class OntologySimilarity:
                 return (d1 + d2 + d3) / (3 * dm)
 
             if metric == "cosine_kernel":
-                embd1 = self.embedding_map[ontology_id1]
-                embd2 = self.embedding_map[ontology_id2]
-                d3 = self._cosine_similarity(embd1, embd2)
-                d3_hill = self.gaussian_hill(d3, center=1, width=width, amplitude=1)
+                embd1 = self.embedding_map[ontology_id1.replace("_", ":")]
+                embd2 = self.embedding_map[ontology_id2.replace("_", ":")]
+                logger.debug(f"Embeddings: {embd1[:5]}, {embd2[:5]}")
+                d3 = self._cosine_similarity(embd1, embd2)  # type:ignore
+                logger.debug(f"Embedding Cosine: {d3}")
+                d3_hill = self.gaussian_hill(d3, center=1, width=0.25, amplitude=1)
+                logger.debug(f"Embedding Cosine Hill: {d3_hill}")
                 return d3_hill
 
             # Direct embedding cosine similarity

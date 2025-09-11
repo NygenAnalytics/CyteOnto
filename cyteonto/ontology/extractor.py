@@ -125,10 +125,6 @@ class OntologyExtractor:
 
         self._ontology_to_labels = ontology_to_labels
         self._label_to_ontology = label_to_ontology
-
-        logger.info(
-            f"Built mappings: {len(ontology_to_labels)} ontology terms, {len(label_to_ontology)} labels"
-        )
         return ontology_to_labels, label_to_ontology
 
     def get_ontology_id_for_label(self, label: str) -> str | None:

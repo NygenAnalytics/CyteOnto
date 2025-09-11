@@ -7,6 +7,7 @@ import anndata as ad  # type:ignore
 import numpy as np  # type:ignore
 import pandas as pd  # type:ignore
 from pydantic_ai import Agent
+from tqdm.auto import tqdm  # type:ignore
 
 from .config import CONFIG
 from .llm_config import EMBDModelConfig
@@ -68,6 +69,8 @@ class CyteOnto:
         self.matcher = CyteOntoMatcher(
             embeddings_file_path=self.embeddings_file_path,
             base_data_path=base_data_path,
+            base_agent=self.base_agent,
+            embedding_model=self.embedding_model,
         )
 
         # Initialize embedding generator for user queries
@@ -422,7 +425,11 @@ class CyteOnto:
 
         all_results = []
 
-        for algorithm_name, algorithm_labels in algo_comparison_data:
+        for algorithm_name, algorithm_labels in tqdm(
+            algo_comparison_data,
+            total=len(algo_comparison_data),
+            desc="Comparing Algorithms",
+        ):
             logger.info(f"Processing algorithm: {algorithm_name}")
 
             detailed_results = await self.compare_single_pair(
