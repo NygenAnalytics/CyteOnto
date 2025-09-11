@@ -122,9 +122,13 @@ class TestCyteOntoMatcher:
             extractor = matcher._get_ontology_extractor()
             assert extractor is None
 
-    def test_get_ontology_similarity_cached(self, temp_dir):
+    def test_get_ontology_similarity_cached(self, temp_dir, mock_base_agent):
         """Test that ontology similarity calculator is cached."""
         matcher = CyteOntoMatcher(None, str(temp_dir))
+        matcher.base_agent = mock_base_agent  # Set the mock agent to avoid None access
+        matcher.embedding_model = (
+            "test-embedding-model"  # Set embedding model to avoid None access
+        )
 
         owl_file = temp_dir / "test.owl"
         with patch.object(

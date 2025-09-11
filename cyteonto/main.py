@@ -7,6 +7,7 @@ import anndata as ad  # type:ignore
 import numpy as np  # type:ignore
 import pandas as pd  # type:ignore
 from pydantic_ai import Agent
+from tqdm.auto import tqdm  # type:ignore
 
 from .config import CONFIG
 from .llm_config import EMBDModelConfig
@@ -68,6 +69,8 @@ class CyteOnto:
         self.matcher = CyteOntoMatcher(
             embeddings_file_path=self.embeddings_file_path,
             base_data_path=base_data_path,
+            base_agent=self.base_agent,
+            embedding_model=self.embedding_model,
         )
 
         # Initialize embedding generator for user queries
@@ -220,6 +223,7 @@ class CyteOnto:
         algorithm_labels: list[str],
         algorithm_name: str = "algorithm",
         study_name: str | None = None,
+        metric: str = "cosine_kernel",
     ) -> list[dict]:
         """
         Compare a single pair of author vs algorithm labels with detailed results.
@@ -342,7 +346,11 @@ class CyteOnto:
 
             if author_ontology_id and algorithm_ontology_id:
                 ontology_similarities = self.matcher.compute_ontology_similarity(
-                    [author_ontology_id], [algorithm_ontology_id]
+                    [author_ontology_id],
+                    [algorithm_ontology_id],
+                    [author_embedding_similarity],
+                    [algorithm_embedding_similarity],
+                    metric=metric,
                 )
                 ontology_hierarchy_similarity = (
                     ontology_similarities[0] if ontology_similarities else 0.0
@@ -387,6 +395,7 @@ class CyteOnto:
         author_labels: list[str],
         algo_comparison_data: list[tuple[str, list[str]]],
         study_name: str | None = None,
+        metric: str = "cosine_kernel",
     ) -> pd.DataFrame:
         """
         Perform detailed batch comparisons between multiple algorithm results.
@@ -416,11 +425,15 @@ class CyteOnto:
 
         all_results = []
 
-        for algorithm_name, algorithm_labels in algo_comparison_data:
+        for algorithm_name, algorithm_labels in tqdm(
+            algo_comparison_data,
+            total=len(algo_comparison_data),
+            desc="Comparing Algorithms",
+        ):
             logger.info(f"Processing algorithm: {algorithm_name}")
 
             detailed_results = await self.compare_single_pair(
-                author_labels, algorithm_labels, algorithm_name, study_name
+                author_labels, algorithm_labels, algorithm_name, study_name, metric
             )
 
             # Add algorithm name to each result

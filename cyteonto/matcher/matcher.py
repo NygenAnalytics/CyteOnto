@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+from pydantic_ai import Agent
 from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
 
 from ..logger_config import logger
@@ -19,6 +20,8 @@ class CyteOntoMatcher:
         self,
         embeddings_file_path: Path | None = None,
         base_data_path: str | None = None,
+        base_agent: Agent | None = None,
+        embedding_model: str | None = None,
     ):
         """
         Initialize CyteOnto matcher.
@@ -36,6 +39,10 @@ class CyteOntoMatcher:
         self._ontology_ids: list[str] | None = None
         self._ontology_extractor: OntologyExtractor | None = None
         self._ontology_similarity: OntologySimilarity | None = None
+
+        # Model information
+        self.base_agent = base_agent
+        self.embedding_model = embedding_model
 
         logger.info(f"Loading ontology embeddings from {self.embeddings_file_path}")
         self.embeddings_ready = self._load_ontology_embeddings()
@@ -82,7 +89,11 @@ class CyteOntoMatcher:
         """Get ontology similarity calculator, creating if needed."""
         if self._ontology_similarity is None:
             owl_path = self.file_manager.get_ontology_owl_path()
-            self._ontology_similarity = OntologySimilarity(owl_path)
+            embedding_path = self.file_manager.get_embedding_file_path(
+                text_model=self.base_agent.model.model_name,  # type: ignore
+                embedding_model=self.embedding_model,  # type: ignore
+            )
+            self._ontology_similarity = OntologySimilarity(owl_path, embedding_path)
         return self._ontology_similarity
 
     def find_closest_ontology_terms(
@@ -141,7 +152,12 @@ class CyteOntoMatcher:
         return results
 
     def compute_ontology_similarity(
-        self, author_ontology_terms: list[str], user_ontology_terms: list[str]
+        self,
+        author_ontology_terms: list[str],
+        user_ontology_terms: list[str],
+        author_ontology_score: list[float] | None = None,
+        user_ontology_score: list[float] | None = None,
+        metric: str = "cosine_kernel",
     ) -> list[float]:
         """
         Compute ontology hierarchy-based similarity between author and user labels.
@@ -163,16 +179,40 @@ class CyteOntoMatcher:
         # Build mappings if needed
         _, label_to_ontology = extractor.build_mappings()
 
+        if metric == "cosine_ensemble" and (
+            author_ontology_score is None or user_ontology_score is None
+        ):
+            logger.error(
+                "Cosine ensemble metric requires author and user ontology scores"
+            )
+            return [0.0] * len(author_ontology_terms)
+        else:
+            # make arrays of 1.0 if scores not provided
+            if author_ontology_score is None:
+                author_ontology_score = [1.0] * len(author_ontology_terms)
+            if user_ontology_score is None:
+                user_ontology_score = [1.0] * len(user_ontology_terms)
+
         similarities = []
-        for author_label, user_label in zip(author_ontology_terms, user_ontology_terms):
+        for author_label, user_label, author_score, user_score in zip(
+            author_ontology_terms,
+            user_ontology_terms,
+            author_ontology_score,
+            user_ontology_score,
+        ):
             # Get ontology IDs for labels
             author_ontology_id = label_to_ontology.get(author_label, author_label)
             user_ontology_id = label_to_ontology.get(user_label, user_label)
 
             # Compute ontology-based similarity
             similarity = similarity_calc.compute_ontology_similarity(
-                author_ontology_id, user_ontology_id
+                author_ontology_id,
+                user_ontology_id,
+                author_score,
+                user_score,
+                metric=metric,
             )
+            logger.debug(f"Matcher Similarity: {similarity}")
             similarities.append(similarity)
 
         logger.debug(f"Computed ontology similarities for {len(similarities)} pairs")
