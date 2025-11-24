@@ -231,7 +231,7 @@ Examples:
         sys.exit(1)
 
     print("\nNext steps:")
-    print("1. Check the tutorial: notebooks/tutorial.ipynb")
+    print("1. Check the tutorial: notebooks/quick_tutorial.ipynb")
 
 
 if __name__ == "__main__":
