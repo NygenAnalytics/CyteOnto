@@ -158,6 +158,7 @@ class CyteOntoMatcher:
         author_ontology_score: list[float] | None = None,
         user_ontology_score: list[float] | None = None,
         metric: str = "cosine_kernel",
+        metric_params: dict | None = None,
     ) -> list[float]:
         """
         Compute ontology hierarchy-based similarity between author and user labels.
@@ -211,6 +212,7 @@ class CyteOntoMatcher:
                 author_score,
                 user_score,
                 metric=metric,
+                metric_params=metric_params,
             )
             logger.debug(f"Matcher Similarity: {similarity}")
             similarities.append(similarity)

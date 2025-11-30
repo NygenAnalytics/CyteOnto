@@ -330,6 +330,7 @@ class OntologySimilarity:
         ontology_score1: float = 1.0,
         ontology_score2: float = 1.0,
         metric: str = "cosine_kernel",
+        metric_params: dict | None = None,
     ) -> float:
         """
         Compute similarity between two ontology terms using a specified metric.
@@ -346,6 +347,11 @@ class OntologySimilarity:
                 - Ensemble: 'cosine_kernel' (DEFAULT; embedding with Gaussian hill)
                 - Combined: 'final'
 
+            metric_params: Optional dictionary of parameters for the metric.
+                For 'cosine_kernel', supported keys are:
+                - center: Center of the Gaussian (default: 1)
+                - width: Width of the Gaussian (default: 0.25)
+                - amplitude: Amplitude of the Gaussian (default: 1)
 
         Returns:
             Similarity score between 0 and 1.
@@ -397,7 +403,16 @@ class OntologySimilarity:
                 logger.debug(f"Embeddings: {embd1[:5]}, {embd2[:5]}")
                 d3 = self._cosine_similarity(embd1, embd2)  # type:ignore
                 logger.debug(f"Embedding Cosine: {d3}")
-                d3_hill = self.gaussian_hill(d3, center=1, width=0.25, amplitude=1)
+
+                # Get parameters with defaults
+                params = metric_params or {}
+                center = params.get("center", 1)
+                width = params.get("width", 0.25)
+                amplitude = params.get("amplitude", 1)
+
+                d3_hill = self.gaussian_hill(
+                    d3, center=center, width=width, amplitude=amplitude
+                )
                 logger.debug(f"Embedding Cosine Hill: {d3_hill}")
                 return d3_hill
 

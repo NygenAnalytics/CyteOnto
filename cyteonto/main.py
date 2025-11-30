@@ -224,6 +224,7 @@ class CyteOnto:
         algorithm_name: str = "algorithm",
         study_name: str | None = None,
         metric: str = "cosine_kernel",
+        metric_params: dict | None = None,
     ) -> list[dict]:
         """
         Compare a single pair of author vs algorithm labels with detailed results.
@@ -233,6 +234,8 @@ class CyteOnto:
             algorithm_labels: Algorithm (predicted) cell type labels from cell ontology
             algorithm_name: Name of the algorithm (for file naming and caching)
             study_name: Name of the study for organizing files (optional)
+            metric: Metric to use for similarity calculation (e.g., "cosine_kernel")
+            metric_params: Additional parameters for the similarity metric
 
         Returns:
             List of detailed comparison dictionaries
@@ -351,6 +354,7 @@ class CyteOnto:
                     [author_embedding_similarity],
                     [algorithm_embedding_similarity],
                     metric=metric,
+                    metric_params=metric_params,
                 )
                 ontology_hierarchy_similarity = (
                     ontology_similarities[0] if ontology_similarities else 0.0
@@ -396,6 +400,7 @@ class CyteOnto:
         algo_comparison_data: list[tuple[str, list[str]]],
         study_name: str | None = None,
         metric: str = "cosine_kernel",
+        metric_params: dict | None = None,
     ) -> pd.DataFrame:
         """
         Perform detailed batch comparisons between multiple algorithm results.
@@ -404,6 +409,8 @@ class CyteOnto:
             author_labels: Author (reference) cell type labels from cell ontology
             algo_comparison_data: List of (algorithm_name, algorithm_labels) tuples
             study_name: Name of the study for organizing files (optional)
+            metric: Metric to use for similarity calculation (e.g., "cosine_kernel")
+            metric_params: Additional parameters for the similarity metric
 
         Returns:
             DataFrame with detailed comparison results including:
@@ -433,7 +440,12 @@ class CyteOnto:
             logger.info(f"Processing algorithm: {algorithm_name}")
 
             detailed_results = await self.compare_single_pair(
-                author_labels, algorithm_labels, algorithm_name, study_name, metric
+                author_labels,
+                algorithm_labels,
+                algorithm_name,
+                study_name,
+                metric,
+                metric_params,
             )
 
             # Add algorithm name to each result
@@ -479,6 +491,7 @@ class CyteOnto:
         target_columns: list[str],
         author_column: str,
         algorithm_names: list[str] | None = None,
+        metric_params: dict | None = None,
     ) -> pd.DataFrame:
         """
         Compare cell type annotations across AnnData objects.
@@ -523,4 +536,6 @@ class CyteOnto:
                 all_comparison_data.append((algo_name, algorithm_labels))
 
         # Perform batch comparison
-        return await self.compare_batch(author_labels, all_comparison_data)
+        return await self.compare_batch(
+            author_labels, all_comparison_data, metric_params=metric_params
+        )
