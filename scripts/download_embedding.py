@@ -7,6 +7,12 @@ from pathlib import Path
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto"
 
 AVAILABLE_MODELS = {
+    "llama-3.3-70b-versatile": {
+        "display_name": "LLaMA 3.3 70B Versatile (descriptions) + Qwen3-Embedding-8B (embeddings)",
+        "description_file": "descriptions_llama-3.3-70b-versatile.json",
+        "embedding_file": "embeddings_llama-3.3-70b-versatile_Qwen-Qwen3-Embedding-8B.npz",
+        "recommended": False,
+    },
     "moonshot-ai_kimi-k2": {
         "display_name": "Moonshot AI Kimi-K2 (descriptions) + Qwen3-Embedding-8B (embeddings)",
         "description_file": "descriptions_moonshotai-Kimi-K2-Instruct.json",
