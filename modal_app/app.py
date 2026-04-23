@@ -27,11 +27,13 @@ volume = modal.Volume.from_name(
     app_config.VOLUME_NAME, create_if_missing=True, version=2
 )
 VOLUME_MAP: dict[str, Volume] = {app_config.VOLUME_MOUNT_PATH: volume}
+cyteonto_secrets = modal.Secret.from_name(app_config.SECRET_NAME)
 
 
 @app.function(
     image=image,
     volumes=VOLUME_MAP,
+    secrets=[cyteonto_secrets],
     timeout=app_config.MODAL_MAX_TIMEOUT_SECONDS,
     cpu=app_config.WORKER_CPU,
     memory=app_config.WORKER_MEMORY_MB,
@@ -82,7 +84,7 @@ def setup(force: bool = False) -> int:
     cpu=app_config.API_CPU,
     memory=app_config.API_MEMORY_MB,
 )
-@modal.asgi_app()
+@modal.asgi_app(custom_domains=app_config.CUSTOM_DOMAINS)
 def fastapi_app():
     """HTTP surface. Exposes /compare, /status/{run_id}, /result/{run_id}."""
     return create_app(volume, run_compare)

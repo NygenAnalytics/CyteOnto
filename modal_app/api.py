@@ -63,6 +63,31 @@ def create_app(volume, run_compare_fn) -> FastAPI:
                     f"expected {len(req.authorLabels)}",
                 )
 
+        if req.llmApiKey is None and req.llmProvider != app_config.LLM_SECRET_PROVIDER:
+            raise HTTPException(
+                400,
+                (
+                    f"llmApiKey is required when llmProvider='{req.llmProvider}'. "
+                    f"Omit llmApiKey only when llmProvider='{app_config.LLM_SECRET_PROVIDER}' "
+                    f"so the hosted '{app_config.LLM_SECRET_ENV_VAR}' secret can be used."
+                ),
+            )
+        if (
+            req.embeddingApiKey is None
+            and req.embeddingProvider != app_config.EMBEDDING_SECRET_PROVIDER
+            and req.embeddingProvider != "ollama"
+        ):
+            raise HTTPException(
+                400,
+                (
+                    f"embeddingApiKey is required when "
+                    f"embeddingProvider='{req.embeddingProvider}'. "
+                    f"Omit embeddingApiKey only when "
+                    f"embeddingProvider='{app_config.EMBEDDING_SECRET_PROVIDER}' "
+                    f"so the hosted '{app_config.EMBEDDING_SECRET_ENV_VAR}' secret can be used."
+                ),
+            )
+
         run_id = f"run-{uuid.uuid4()}"
         status = {
             "runId": run_id,
