@@ -1,6 +1,7 @@
 """Compare-job worker body. Runs inside the worker Modal container."""
 
 import json
+import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,46 @@ from pydantic_ai import Agent
 from .config import AppConfig
 
 app_config = AppConfig()
+
+
+def _resolve_api_keys(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing LLM/embedding keys from the attached secret when the provider matches."""
+    resolved = dict(payload)
+
+    if not resolved.get("llmApiKey"):
+        if resolved.get("llmProvider") == app_config.LLM_SECRET_PROVIDER:
+            secret_key = os.environ.get(app_config.LLM_SECRET_ENV_VAR)
+            if not secret_key:
+                raise RuntimeError(
+                    f"{app_config.LLM_SECRET_ENV_VAR} is not set on the worker. "
+                    f"Attach the '{app_config.SECRET_NAME}' Modal secret or "
+                    f"pass llmApiKey in the request."
+                )
+            resolved["llmApiKey"] = secret_key
+        else:
+            raise RuntimeError(
+                f"llmApiKey missing and llmProvider='{resolved.get('llmProvider')}' "
+                f"is not covered by the hosted secret."
+            )
+
+    if not resolved.get("embeddingApiKey"):
+        if resolved.get("embeddingProvider") == app_config.EMBEDDING_SECRET_PROVIDER:
+            secret_key = os.environ.get(app_config.EMBEDDING_SECRET_ENV_VAR)
+            if not secret_key:
+                raise RuntimeError(
+                    f"{app_config.EMBEDDING_SECRET_ENV_VAR} is not set on the worker. "
+                    f"Attach the '{app_config.SECRET_NAME}' Modal secret or "
+                    f"pass embeddingApiKey in the request."
+                )
+            resolved["embeddingApiKey"] = secret_key
+        elif resolved.get("embeddingProvider") != "ollama":
+            raise RuntimeError(
+                f"embeddingApiKey missing and "
+                f"embeddingProvider='{resolved.get('embeddingProvider')}' "
+                f"is not covered by the hosted secret."
+            )
+
+    return resolved
 
 
 def _utc_now() -> str:
@@ -84,6 +125,8 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     csv_path, json_path = _result_paths(run_id)
 
     try:
+        payload = _resolve_api_keys(payload)
+
         agent = build_agent(
             payload["llmProvider"], payload["llmModel"], payload["llmApiKey"]
         )

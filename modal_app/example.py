@@ -5,17 +5,10 @@ from pathlib import Path
 
 import requests
 
-# ---------------------------------------------------------------------------
-# CONFIG (edit freely)
-# ---------------------------------------------------------------------------
+BASE_URL = os.environ.get("CYTEONTO_URL", "https://cyteonto.nygen.io")
 
-BASE_URL = os.environ.get(
-    "CYTEONTO_URL",
-    "https://nygen-labs-cytetrainer--cyteonto-api-fastapi-app.modal.run",
-)
-
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-EMBEDDING_API_KEY = os.environ.get("EMBEDDING_MODEL_API_KEY", "")
+LLM_API_KEY = None  # or  os.environ.get("LLM_API_KEY")
+EMBEDDING_API_KEY = None  # or  os.environ.get("EMBEDDING_MODEL_API_KEY")
 
 PAYLOAD: dict = {
     "authorLabels": [
@@ -27,13 +20,10 @@ PAYLOAD: dict = {
         "algo1": ["lung macrophage", "Treg", "CD8 T cell"],
         "algo2": ["alveolar mac", "T regulatory cell", "cytotoxic T cell"],
     },
-    "llmProvider": "together",
-    "llmModel": "moonshotai/Kimi-K2.5",
-    "embeddingProvider": "openrouter",
-    "embeddingModel": "qwen/qwen3-embedding-8b",
     "maxDescriptionConcurrency": 50,
     "embeddingMaxConcurrent": 50,
-    "metric": "cosine_kernel",
+    # Using Default Providers and modal secrets API keys.
+    # Check out README for more details.
 }
 
 POLL_INTERVAL_S = 10
@@ -41,13 +31,12 @@ POLL_TIMEOUT_S = 60 * 60
 RESULT_FORMAT = "csv"
 OUTPUT_DIR = Path("./cyteonto_results")
 
-# ---------------------------------------------------------------------------
-# Client helpers
-# ---------------------------------------------------------------------------
-
-
 def submit(payload: dict) -> str:
-    body = {**payload, "llmApiKey": LLM_API_KEY, "embeddingApiKey": EMBEDDING_API_KEY}
+    body = dict(payload)
+    if LLM_API_KEY:
+        body["llmApiKey"] = LLM_API_KEY
+    if EMBEDDING_API_KEY:
+        body["embeddingApiKey"] = EMBEDDING_API_KEY
     resp = requests.post(f"{BASE_URL}/compare", json=body, timeout=30)
     resp.raise_for_status()
     data = resp.json()
@@ -86,13 +75,6 @@ def fetch_result(run_id: str, fmt: str, out_dir: Path) -> Path:
 
 
 def main() -> int:
-    if not LLM_API_KEY or not EMBEDDING_API_KEY:
-        print(
-            "Missing LLM_API_KEY or EMBEDDING_MODEL_API_KEY in the environment.",
-            file=sys.stderr,
-        )
-        return 2
-
     run_id = submit(PAYLOAD)
     status = poll(run_id, POLL_INTERVAL_S, POLL_TIMEOUT_S)
 

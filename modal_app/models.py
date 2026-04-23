@@ -23,11 +23,11 @@ class CompareRequest(BaseModel):
 
     llmProvider: LlmProvider = app_config.DEFAULT_LLM_PROVIDER
     llmModel: str = app_config.DEFAULT_LLM_MODEL
-    llmApiKey: str
+    llmApiKey: str | None = None
 
     embeddingProvider: EmbdProvider = app_config.DEFAULT_EMBEDDING_PROVIDER
     embeddingModel: str = app_config.DEFAULT_EMBEDDING_MODEL
-    embeddingApiKey: str
+    embeddingApiKey: str | None = None
     embeddingModelSettings: dict[str, Any] | None = None
     embeddingMaxConcurrent: int = Field(default=100, ge=1)
 

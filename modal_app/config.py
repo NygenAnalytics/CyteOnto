@@ -18,16 +18,24 @@ class AppConfig:
 
     VOLUME_NAME: str = "cyteonto"
     VOLUME_MOUNT_PATH: str = "/cyteonto_data"
+    SECRET_NAME: str = "cyteonto-secrets"
+
+    CUSTOM_DOMAINS: list[str] = ["cyteonto.nygen.io"]
 
     REMOTE_DATA_DIR: str = VOLUME_MOUNT_PATH
     REMOTE_USER_DIR: str = f"{VOLUME_MOUNT_PATH}/user_files"
     REMOTE_CELL_ONTOLOGY_DIR: str = f"{VOLUME_MOUNT_PATH}/cell_ontology"
     REMOTE_EMBEDDING_DIR: str = f"{VOLUME_MOUNT_PATH}/embedding"
 
-    DEFAULT_LLM_PROVIDER = "openrouter"
+    DEFAULT_LLM_PROVIDER: str = "together"
     DEFAULT_LLM_MODEL: str = "moonshotai/Kimi-K2.5"
     DEFAULT_EMBEDDING_PROVIDER: str = "openrouter"
     DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
+
+    LLM_SECRET_PROVIDER: str = "together"
+    LLM_SECRET_ENV_VAR: str = "TOGETHER_API_KEY"
+    EMBEDDING_SECRET_PROVIDER: str = "openrouter"
+    EMBEDDING_SECRET_ENV_VAR: str = "OPENROUTER_API_KEY"
 
     WORKER_CPU: float = 1.0
     WORKER_MEMORY_MB: int = 2048
