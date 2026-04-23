@@ -15,10 +15,12 @@ dependencies = [
     "jupyter>=1.1.1",
     "logfire>=4.3.3",
     "loguru>=0.7.3",
+    "modal>=1.4.2",
     "mypy>=1.17.1",
     "numpy>=2.3.2",
     "owlready2>=0.48",
     "pandas>=2.3.1",
+    "pyarrow>=24.0.0",
     "pydantic>=2.11.7",
     "pydantic-ai>=0.7.4",
     "pytest>=8.4.1",
@@ -30,4 +32,9 @@ dependencies = [
     "tomli>=2.2.1",
     "tqdm>=4.67.1",
     "xmltodict>=0.14.2",
+]
+
+[dependency-groups]
+dev = [
+    "seaborn>=0.13.2",
 ]
