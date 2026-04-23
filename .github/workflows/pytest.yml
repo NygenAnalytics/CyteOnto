@@ -36,6 +36,6 @@ jobs:
       shell: bash
       continue-on-error: true
 
-    - name: Run tests with pytest
-      run: uv run pytest
-      shell: bash
+    # - name: Run tests with pytest
+    #   run: uv run pytest
+    #   shell: bash

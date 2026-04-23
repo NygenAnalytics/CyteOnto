@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cyteonto_new.logger import logger  # noqa: E402
 from cyteonto_new.paths import PathConfig  # noqa: E402
 
-BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2/"
+BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
 DEFAULT_TEXT_MODEL: str = "moonshotai/Kimi-K2.5"
 DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
