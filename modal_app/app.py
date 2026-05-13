@@ -32,7 +32,7 @@ cyteonto_secrets = modal.Secret.from_name(app_config.SECRET_NAME)
 
 @app.function(
     image=image,
-    volumes=VOLUME_MAP,
+    volumes=VOLUME_MAP,  # type:ignore
     secrets=[cyteonto_secrets],
     timeout=app_config.MODAL_MAX_TIMEOUT_SECONDS,
     cpu=app_config.WORKER_CPU,
@@ -45,15 +45,15 @@ async def run_compare(run_id: str, payload: dict[str, Any]) -> None:
 
 @app.function(
     image=image,
-    volumes=VOLUME_MAP,
+    volumes=VOLUME_MAP,  # type:ignore
     timeout=3600,
     cpu=app_config.WORKER_CPU,
     memory=app_config.WORKER_MEMORY_MB,
 )
 def setup(force: bool = False) -> int:
     """One-shot hook: download core ontology assets onto the Modal volume."""
-    from cyteonto_new.logger import logger
-    from cyteonto_new.setup import main as setup_main
+    from cyteonto.logger import logger
+    from cyteonto.setup import main as setup_main
 
     argv = ["setup.py", "--data-dir", app_config.REMOTE_DATA_DIR]
     if force:
@@ -79,7 +79,7 @@ def setup(force: bool = False) -> int:
 
 @app.function(
     image=image,
-    volumes=VOLUME_MAP,
+    volumes=VOLUME_MAP,  # type:ignore
     timeout=900,
     cpu=app_config.API_CPU,
     memory=app_config.API_MEMORY_MB,
