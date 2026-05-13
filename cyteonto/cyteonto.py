@@ -244,11 +244,13 @@ class CyteOnto:
                 )
                 return cached[0]
 
-        missing = [lbl for lbl in labels if lbl not in existing]
+        unique_labels = list(dict.fromkeys(labels))
+        missing = [lbl for lbl in unique_labels if lbl not in existing]
         if missing:
             logger.info(
                 f"Generating {len(missing)} new descriptions for '{identifier}' "
-                f"(cached: {len(labels) - len(missing)})"
+                f"({len(labels)} labels -> {len(unique_labels)} unique, "
+                f"{len(unique_labels) - len(missing)} cached)"
             )
             new_descs, sub_usage = await describe_cells(
                 base_agent=self.agent,
@@ -263,9 +265,10 @@ class CyteOnto:
                     existing[lbl] = desc
             storage.save_descriptions(desc_path, existing)
 
-        # Embed every label. Blanks are not cached, so the raw label text is
-        # used as a fallback to keep the array aligned. Next compare(...) run
-        # will retry description generation for those labels and overwrite.
+        # Build the text to embed for every label position. Blanks are not
+        # cached, so the raw label text is used as a fallback to keep the
+        # array aligned. Next compare(...) run will retry description
+        # generation for those labels and overwrite.
         texts: list[str] = []
         fallback_count = 0
         for lbl in labels:
@@ -282,9 +285,27 @@ class CyteOnto:
                 "label text as a fallback; they will be retried on the next run."
             )
 
-        embeddings = await embed_texts(texts, self.embedding)
-        if embeddings is None:
+        # Only embed each unique text once, then fan results back out so the
+        # final array stays aligned with the original `labels` order/length.
+        text_to_idx: dict[str, int] = {}
+        unique_texts: list[str] = []
+        for t in texts:
+            if t not in text_to_idx:
+                text_to_idx[t] = len(unique_texts)
+                unique_texts.append(t)
+        if len(unique_texts) < len(texts):
+            logger.info(
+                f"Embedding {len(unique_texts)} unique texts for '{identifier}' "
+                f"({len(texts)} total label positions)"
+            )
+
+        unique_embeddings = await embed_texts(unique_texts, self.embedding)
+        if unique_embeddings is None:
             raise RuntimeError(f"Failed to embed labels for '{identifier}'")
+        fan_out_idx = np.fromiter(
+            (text_to_idx[t] for t in texts), dtype=np.int64, count=len(texts)
+        )
+        embeddings = unique_embeddings[fan_out_idx]
 
         storage.save_user_embeddings(
             emb_path,

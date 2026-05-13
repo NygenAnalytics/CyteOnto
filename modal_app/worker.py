@@ -113,9 +113,9 @@ def build_agent(provider: str, model: str, api_key: str) -> Agent:
 
 async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     """Execute one compare request end-to-end and update `status.json` at each stage."""
-    from cyteonto_new import CyteOnto
-    from cyteonto_new.logger import logger
-    from cyteonto_new.models import EmbdConfig
+    from cyteonto import CyteOnto
+    from cyteonto.logger import logger
+    from cyteonto.models import EmbdConfig
 
     status = _read_status(run_id)
     status.update({"state": "running", "startedAt": _utc_now()})

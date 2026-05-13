@@ -1,6 +1,6 @@
 # modal_app
 
-Modal deployment of the `cyteonto_new` package as an HTTP service.
+Modal deployment of the `cyteonto` package as an HTTP service.
 
 ## Quickstart
 
@@ -63,7 +63,7 @@ For override patterns (your own keys, different provider, custom metric paramete
 
 ## What is CyteOnto
 
-`cyteonto_new` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given parallel label lists from a study author and one or more annotation algorithms, it:
+`cyteonto` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given parallel label lists from a study author and one or more annotation algorithms, it:
 
 1. Generates a structured description for every label with an LLM.
 2. Embeds those descriptions with a configured embedding model.
@@ -127,7 +127,7 @@ A healthy deploy prints something like:
 ```
 Created objects.
 ├── Created mount PythonPackage:modal_app
-├── Created mount /home/<you>/.../cyteonto_new
+├── Created mount /home/<you>/.../cyteonto
 ├── Created mount /home/<you>/.../pyproject.toml
 ├── Created function run_compare.
 ├── Created function setup.
@@ -205,7 +205,7 @@ Request body:
 | `maxDescriptionConcurrency` | `int >= 1` | no | `100` | Concurrency cap for LLM description calls. |
 | `usePubmedTool` | `bool` | no | `false` | If `true`, the LLM can call a PubMed abstract tool while generating each description. |
 | `reasoning` | `bool` | no | `false` | Enable provider reasoning mode. Keep `false` for most use cases. |
-| `metric` | `str` | no | `cosine_kernel` | See the `cyteonto_new` README for the full list. |
+| `metric` | `str` | no | `cosine_kernel` | See the `cyteonto` README for the full list. |
 | `metricParams` | `dict \| null` | no | `null` | Metric-specific parameters (for example `{"width": 0.25}` for `cosine_kernel`). |
 | `minMatchSimilarity` | `float in [0, 1]` | no | `0.1` | Threshold below which a label is considered unmatched to any CL term. |
 | `useCache` | `bool` | no | `true` | If `false`, all on-disk caches are bypassed for this run. |
@@ -489,4 +489,4 @@ Redeploy with `uv run modal deploy -m modal_app --env cytetrainer` after changin
 
 ## Related
 
-- `cyteonto_new/README.md` covers the library, the similarity metrics, and the caching rules in depth.
+- `cyteonto/README.md` covers the library, the similarity metrics, and the caching rules in depth.

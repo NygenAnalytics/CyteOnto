@@ -12,7 +12,7 @@ class AppConfig:
 
     PACKAGE_ROOT: Path = Path(__file__).resolve().parent.parent
     PYPROJECT_PATH: Path = PACKAGE_ROOT / "pyproject.toml"
-    CYTEONTO_DIR: Path = PACKAGE_ROOT / "cyteonto_new"
+    CYTEONTO_DIR: Path = PACKAGE_ROOT / "cyteonto"
 
     PYTHON_VERSION: str = "3.13"
 
@@ -81,8 +81,9 @@ def build_cyteonto_image() -> modal.Image:
         .uv_pip_install(*deps)
         .add_local_dir(
             str(app_config.CYTEONTO_DIR),
-            "/root/cyteonto_new",
+            "/root/cyteonto",
             copy=True,
+            ignore=["*.ipynb", "*.npz", "*.json"]
         )
         .add_local_file(
             str(app_config.PYPROJECT_PATH),
