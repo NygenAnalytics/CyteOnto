@@ -47,6 +47,7 @@ class Config:
         "openai": "https://api.openai.com/v1/embeddings",
         "google": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
         "together": "https://api.together.xyz/v1/embeddings",
+        "nebius": "https://api.tokenfactory.nebius.com/v1/embeddings",
     }
 
     RESULT_COLUMNS: list[str] = [

@@ -1,153 +1,162 @@
 # File Management
 
-## File Organization Structure
+CyteOnto stores ontology artifacts under `data_dir` and per-run user artifacts under `user_dir` (default: `<data_dir>/user_files`). Paths are resolved by `PathConfig` in `cyteonto/paths.py`. See [cyteonto/README.md](../cyteonto/README.md#on-disk-layout) for storage key layouts inside NPZ and JSON files.
 
-CyteOnto automatically organizes your files for optimal caching and study management. Understanding this structure helps you manage your data effectively.
+## Directory structure
 
-### Overall Directory Structure
+Default roots: `cyteonto/data/` for shipped and generated ontology data, `cyteonto/data/user_files/` for comparison caches.
 
 ```
-cyteonto/data/
-├── cell_ontology/                              # Core ontology files
-│   ├── cl.owl                                  # Cell Ontology OWL file
-│   └── cell_to_cell_ontology.csv               # Ontology mappings
-├── embedding/                                  # Base embeddings (generated once)
-│   ├── cell_ontology/                          # Ontology term embeddings
-│   │   ├── embeddings_moonshotai-Kimi-K2-Instruct_Qwen-Qwen3-Embedding-8B.npz
-│   │   └── embeddings_model-name_embedding-model.npz
-│   └── descriptions/                           # Generated descriptions
-│       ├── descriptions_moonshotai-Kimi-K2-Instruct.json
-│       └── descriptions_model-name.json
-└── user_files/                                 # Study-specific data
-    ├── embeddings/                             # User label embeddings
-    │   ├── study1/                             # Study-specific organization
-    │   │   ├── author/                         # Author labels
-    │   │   │   └── author_embeddings_model_embedding-model.npz
-    │   │   └── algorithms/                     # Algorithm predictions
-    │   │       ├── algorithm1_embeddings_model_embedding-model.npz
-    │   │       └── algorithm2_embeddings_model_embedding-model.npz
-    │   └── study2/
-    └── descriptions/                           # User label descriptions
-        ├── study1/
-        │   ├── author/
-        │   │   └── author_descriptions_model-name.json
-        │   └── algorithms/
-        │       ├── algorithm1_descriptions_model-name.json
-        │       └── algorithm2_descriptions_model-name.json
-        └── study2/
+<data_dir>/
+├── cell_ontology/
+│   ├── cl.owl                              # shipped
+│   └── cell_to_cell_ontology.csv           # shipped
+└── embedding/
+    ├── cell_ontology/
+    │   └── embeddings_<text_model>_<embd_model>.npz
+    └── descriptions/
+        └── descriptions_<text_model>.json
+
+<user_dir>/                                 # default: <data_dir>/user_files
+├── embeddings/
+│   └── <run_id>/
+│       ├── author/
+│       │   └── author_embeddings_<text>_<embd>.npz
+│       └── algorithm/
+│           ├── <algo1>_embeddings_<text>_<embd>.npz
+│           └── <algo2>_embeddings_<text>_<embd>.npz
+└── descriptions/
+    └── <run_id>/
+        ├── author/
+        │   └── author_descriptions_<text>.json
+        └── algorithm/
+            ├── <algo1>_descriptions_<text>.json
+            └── <algo2>_descriptions_<text>.json
 ```
 
-### File Naming Conventions
+`<run_id>` and algorithm names are passed through `_clean_identifier` (e.g. `sample.run.001` becomes `sample_run_001`). Model names use `_clean_model` (slashes and colons become hyphens; case and dots are preserved).
 
-#### Base Files (Ontology)
-- **Descriptions**: `descriptions_{model-name}.json`
-- **Embeddings**: `embeddings_{description-model}_{embedding-model}.npz`
+## File naming
 
-Examples:
-- `descriptions_moonshotai-Kimi-K2-Instruct.json`
-- `embeddings_moonshotai-Kimi-K2-Instruct_Qwen-Qwen3-Embedding-8B.npz`
+### Ontology (generated once per model configuration)
 
-#### User Files (Study-specific)
-- **Author descriptions**: `author_descriptions_{model-name}.json`
-- **Author embeddings**: `author_embeddings_{description-model}_{embedding-model}.npz`
-- **Algorithm descriptions**: `{algorithm-name}_descriptions_{model-name}.json`
-- **Algorithm embeddings**: `{algorithm-name}_embeddings_{description-model}_{embedding-model}.npz`
+| Artifact | Pattern | Example |
+|----------|---------|---------|
+| Descriptions | `descriptions_<llmKey>.json` | `descriptions_together_moonshotai-Kimi-K2.6.json` |
+| Embeddings | `embeddings_<llmKey>_<embdKey>.npz` | `embeddings_together_moonshotai-Kimi-K2.6_openrouter_qwen-qwen3-embedding-8b.npz` |
 
-Examples:
-- `author_descriptions_moonshotai-Kimi-K2-Instruct.json`
-- `algorithm1_embeddings_moonshotai-Kimi-K2-Instruct_Qwen-Qwen3-Embedding-8B.npz`
+### User files (per `run_id`, kind, and identifier)
 
-## Caching System
-Using caching, we avoid regenerating descriptions and embeddings and ensures reproducible results across runs. CyteOnto automatically validates cache files.
+| Artifact | Pattern |
+|----------|---------|
+| Author descriptions | `author_descriptions_<llmKey>.json` |
+| Author embeddings | `author_embeddings_<llmKey>_<embdKey>.npz` |
+| Algorithm descriptions | `<identifier>_descriptions_<llmKey>.json` |
+| Algorithm embeddings | `<identifier>_embeddings_<llmKey>_<embdKey>.npz` |
 
-### Cache Management
+`kind` is either `author` or `algorithm`. For author rows, `identifier` is always `author`.
 
-#### Get Cache Statistics
+## Custom paths
+
 ```python
-# Get comprehensive cache information
-cache_stats = cyto.get_cache_stats()
-print(f"Total cached files: {cache_stats['total_files']}")
-print(f"Total cache size: {cache_stats['total_size_mb']:.2f} MB")
-print(f"Studies: {cache_stats['studies']}")
-print(f"Files by type: {cache_stats['files_by_type']}")
-```
+from cyteonto import LlmConfig
 
-#### Clean Up Invalid Cache Files
-```python
-# Remove corrupted or invalid files
-removed_count = cyto.cleanup_user_cache()
-print(f"Cleaned up {removed_count} invalid cache files")
-```
-
-#### Global Cache Cleanup
-```python
-# Package-level cache cleanup (use with caution)
-import cyteonto
-
-removed_count = cyteonto.cleanup_cache(
-    user_data_path="/path/to/user/files"  # Optional custom path
+cyto = await CyteOnto.from_config(
+    agent=agent,
+    embedding=embd,
+    llm=LlmConfig(provider="together", model="moonshotai/Kimi-K2.6"),
+    data_dir="/path/to/data",
+    user_dir="/path/to/user_files",  # optional; defaults to data_dir/user_files
 )
-print(f"Globally cleaned up {removed_count} files")
 ```
 
-#### Manual Cache Management
+Custom `data_dir` must still contain `cell_ontology/cl.owl` and `cell_ontology/cell_to_cell_ontology.csv` with those exact filenames.
+
+## Caching behavior
+
+| Artifact | Reused when |
+|----------|-------------|
+| Ontology descriptions | File exists, every CL id has a non-blank entry, and `force_regenerate=False` |
+| Ontology embeddings | NPZ exists and no descriptions were regenerated on this `from_config` call |
+| User descriptions | Label already in JSON with a non-blank `CellDescription` |
+| User embeddings | NPZ exists, embedded `labels` array matches the request exactly, and every label has a non-blank description |
+
+Blank LLM failures are not written to JSON; those labels are retried on the next call. Embeddings for those positions may still use the raw label text so array shape stays aligned.
+
+Per-label caching means adding one new label to a run does not re-describe existing labels.
+
+Set `use_cache=False` on `compare` to bypass all of the above for that invocation.
+
+## Cache utilities
+
+### Statistics
+
+```python
+stats = cyto.cache_stats()
+print(stats["total_files"], stats["total_size_mb"], stats["stale_files"])
+
+# Restrict to one run
+stats = cyto.cache_stats(run_id="sample_run_001")
+```
+
+`stale_files` counts NPZ files that fail validation (for example legacy files missing the inline `labels` key).
+
+### Remove a run
+
+```python
+cyto.clear_run("sample_run_001")                                    # entire run
+cyto.clear_run("sample_run_001", kind="author")                     # author only
+cyto.clear_run("sample_run_001", kind="algorithm")                  # all algorithms
+cyto.clear_run("sample_run_001", kind="algorithm", identifier="algo1")
+```
+
+Returns the number of files removed.
+
+### Purge invalid NPZ files
+
+```python
+removed = cyto.purge_stale()                    # all runs
+removed = cyto.purge_stale(run_id="sample_run_001")
+```
+
+Deletes user embedding NPZ files that `load_user_embeddings` cannot validate.
+
+### Manual cleanup
+
 ```bash
-# View cache structure
+# Inspect caches (default package data dir)
 tree cyteonto/data/user_files/
 
-# Remove specific study cache
-rm -rf cyteonto/data/user_files/embeddings/old_study/
-rm -rf cyteonto/data/user_files/descriptions/old_study/
+# Remove one run
+rm -rf cyteonto/data/user_files/embeddings/my_run_id/
+rm -rf cyteonto/data/user_files/descriptions/my_run_id/
 
-# Check cache sizes
-du -sh cyteonto/data/user_files/*/
+du -sh cyteonto/data/user_files/embeddings/*/
 ```
 
-### Cache Configuration
+## Run IDs
 
-#### Enable/Disable Caching
+`run_id` is the cache namespace for a comparison:
+
 ```python
-# Disable caching (not recommended for production)
-cyto = cyteonto.CyteOnto(
-    base_agent=agent,
-    embedding_model="Qwen/Qwen3-Embedding-8B",
-    embedding_provider="deepinfra",
-    enable_user_file_caching=False
-)
-
-# Enable with custom paths
-cyto = cyteonto.CyteOnto(
-    base_agent=agent,
-    embedding_model="Qwen/Qwen3-Embedding-8B",
-    embedding_provider="deepinfra",
-    base_data_path="/custom/base/path",
-    user_data_path="/custom/user/path",
-    enable_user_file_caching=True
+df = await cyto.compare(
+    author_labels=[...],
+    algorithms={"method_a": [...], "method_b": [...]},
+    run_id="liver_scrna_2024_v1",
 )
 ```
 
-## Study Organization
+- **Reuse** the same `run_id` when rerunning with identical label lists to avoid redundant API calls.
+- **Choose a new `run_id`** when labels or algorithms change enough that you want a clean cache tree.
+- **Omit `run_id`** to auto-generate `run-<uuid4>`; recover it from logs or `df["run_id"].iloc[0]`.
 
-### Study Names as Identifiers
+Naming tips: use descriptive, filesystem-safe strings (`brain_cohort_v2`, `2024-05-rerun`). Avoid reserving the name `author` for algorithm keys.
 
-Study names serve as unique identifiers and organize your data:
-```python
-# Each study creates separate directories
-results1 = await cyto.compare_batch(
-    author_labels=labels1,
-    algo_comparison_data=algo_data1,
-    study_name="healthy_liver_2024"  # Creates healthy_liver_2024/
-)
+## LLM usage tracking
 
-results2 = await cyto.compare_batch(
-    author_labels=labels2,
-    algo_comparison_data=algo_data2,
-    study_name="diseased_liver_2024"  # Creates diseased_liver_2024/
-)
-```
+`cyto.usage` is an `AgentUsage` object that accumulates token and request counts across `from_config` and `compare` for cost monitoring.
 
-### Best Practices for Study Names
-- Use descriptive names: `brain_scrnaseq_2024`, `liver_disease_cohort1`
-- Include dates or versions: `study_v1_jan2024`, `rerun_march2024`
-- Avoid spaces and special characters: use underscores or hyphens
-- Keep names consistent across related analyses
+## Related documentation
+
+- [WORKFLOW.md](WORKFLOW.md) — Process flow and diagrams
+- [cyteonto/README.md](../cyteonto/README.md) — Full API, metrics, and error behavior

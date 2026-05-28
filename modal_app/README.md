@@ -431,7 +431,7 @@ Mounted at `/cyteonto_data` inside every container:
 │   └── cl.owl
 ├── embedding/
 │   ├── cell_ontology/
-│   │   └── embeddings_<text>_<embd>.npz
+│   │   └── embeddings_<llmKey>_<embdKey>.npz
 │   └── descriptions/
 │       └── descriptions_<text>.json
 └── user_files/
@@ -440,8 +440,8 @@ Mounted at `/cyteonto_data` inside every container:
         ├── result.csv
         ├── result.json
         ├── embeddings/
-        │   ├── author/author_embeddings_<text>_<embd>.npz
-        │   └── algorithm/<algo_name>_embeddings_<text>_<embd>.npz
+        │   ├── author/author_embeddings_<llmKey>_<embdKey>.npz
+        │   └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
         └── descriptions/
             ├── author/author_descriptions_<text>.json
             └── algorithm/<algo_name>_descriptions_<text>.json

@@ -13,20 +13,25 @@ import requests
 from tqdm.auto import tqdm  # type: ignore
 
 from .logger import logger  # noqa: E402
-from .paths import PathConfig  # noqa: E402
+from .models import EmbdConfig, LlmConfig  # noqa: E402
+from .paths import PathConfig, artifact_key_segment  # noqa: E402
 
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
-DEFAULT_TEXT_MODEL: str = "moonshotai/Kimi-K2.6"
-DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
+DEFAULT_LLM = LlmConfig(provider="together", model="moonshotai/Kimi-K2.6")
+DEFAULT_EMBEDDING = EmbdConfig()
+
+DEFAULT_LLM_KEY = DEFAULT_LLM.to_artifact_key()
+DEFAULT_EMBD_KEY = DEFAULT_EMBEDDING.to_artifact_key()
 
 ONTOLOGY_CSV_URL: str = f"{BASE_URL}/cell_ontology/cell_to_cell_ontology.csv"
 ONTOLOGY_OWL_URL: str = f"{BASE_URL}/cell_ontology/cl.owl"
 ONTOLOGY_DESCRIPTIONS_URL: str = (
-    f"{BASE_URL}/descriptions/descriptions_moonshotai-Kimi-K2.6.json"
+    f"{BASE_URL}/descriptions/descriptions_{artifact_key_segment(DEFAULT_LLM_KEY)}.json"
 )
 ONTOLOGY_EMBEDDINGS_URL: str = (
-    f"{BASE_URL}/embeddings/embeddings_moonshotai-Kimi-K2.6_qwen-qwen3-embedding-8b.npz"
+    f"{BASE_URL}/embeddings/embeddings_{artifact_key_segment(DEFAULT_LLM_KEY)}_"
+    f"{artifact_key_segment(DEFAULT_EMBD_KEY)}.npz"
 )
 
 
@@ -86,11 +91,11 @@ def main() -> int:
         (ONTOLOGY_OWL_URL, paths.ontology_owl),
         (
             ONTOLOGY_DESCRIPTIONS_URL,
-            paths.ontology_descriptions(DEFAULT_TEXT_MODEL),
+            paths.ontology_descriptions(DEFAULT_LLM_KEY),
         ),
         (
             ONTOLOGY_EMBEDDINGS_URL,
-            paths.ontology_embeddings(DEFAULT_TEXT_MODEL, DEFAULT_EMBEDDING_MODEL),
+            paths.ontology_embeddings(DEFAULT_LLM_KEY, DEFAULT_EMBD_KEY),
         ),
     ]
 

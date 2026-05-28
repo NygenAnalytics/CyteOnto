@@ -62,6 +62,8 @@ Imported from `cyteonto`:
 | `CyteOnto`          | class    | Main orchestrator                                    |
 | `CellDescription`   | model    | Structured LLM output for a single cell type         |
 | `EmbdConfig`        | model    | Embedding provider configuration                     |
+| `LlmConfig`         | model    | LLM provider + model id for description caches       |
+| `ModelArtifactKey`  | model    | Canonical cache key (provider, company, modelName)   |
 | `AgentUsage`        | model    | LLM request/token/tool tally                         |
 | `RESULT_COLUMNS`    | list     | Column order of the DataFrame returned by `compare`  |
 
@@ -73,18 +75,19 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from cyteonto import CyteOnto, EmbdConfig
+from cyteonto import CyteOnto, EmbdConfig, LlmConfig
 
 agent = Agent(
     OpenRouterModel(
-        "moonshotai/Kimi-K2.5",  # "moonshotai/Kimi-K2.5"
+        "moonshotai/Kimi-K2.6",
         provider=OpenRouterProvider(api_key=os.environ["OPENROUTER_API_KEY"]),
     )
 )
 
+llm = LlmConfig(provider="openrouter", model="moonshotai/Kimi-K2.6")
 embd = EmbdConfig(apiKey=os.environ["EMBEDDING_MODEL_API_KEY"])
 
-cyto = await CyteOnto.from_config(agent=agent, embedding=embd)
+cyto = await CyteOnto.from_config(agent=agent, embedding=embd, llm=llm)
 
 df = await cyto.compare(
     author_labels=["animal stem cell", "BFU-E", "neutrophilic granuloblast"],
@@ -167,9 +170,20 @@ Default behavior when the caller writes `EmbdConfig()` (no args):
 
 `CyteOnto.__init__` fails fast with `ValueError` if the resolved `apiKey` is empty and the provider is not `ollama`.
 
+### `LlmConfig`
+
+```python
+LlmConfig(
+    provider="together",              # routing host slug (lowercased on disk)
+    model="moonshotai/Kimi-K2.6",     # must match agent.model.model_name
+)
+```
+
+Cache filenames include both `provider` and the parsed `company` / `modelName` from `model`. The pydantic-ai `Agent` does not expose the routing provider reliably, so pass `LlmConfig` explicitly even when the agent uses a custom `base_url`.
+
 ### Recommended LLM
 
-The package uses `moonshotai/Kimi-K2.5` from `Together AI` as the suggested default for description generation. The caller still constructs the `pydantic_ai.Agent` (and thereby chooses the LLM provider), so the constant is a convenience pointer, not a hard-coded dependency. Any pydantic-ai supported model works.
+The package suggests `moonshotai/Kimi-K2.6` via Together or OpenRouter. Any pydantic-ai supported model works as long as `LlmConfig.model` matches the agent.
 
 ---
 
@@ -181,6 +195,7 @@ The package uses `moonshotai/Kimi-K2.5` from `Together AI` as the suggested defa
 CyteOnto(
     agent: pydantic_ai.Agent,
     embedding: EmbdConfig,
+    llm: LlmConfig,
     data_dir: str | Path | None = None,   # defaults to cyteonto/data
     user_dir: str | Path | None = None,   # defaults to <data_dir>/user_files
     max_description_concurrency: int = 100,
@@ -196,6 +211,7 @@ CyteOnto(
 cyto = await CyteOnto.from_config(
     agent=agent,
     embedding=embd,
+    llm=llm,
     data_dir=None,
     user_dir=None,
     force_regenerate=False,
@@ -207,7 +223,7 @@ cyto = await CyteOnto.from_config(
 Additional behavior on top of `__init__`:
 
 1. Checks that `cell_ontology/cell_to_cell_ontology.csv` and `cell_ontology/cl.owl` exist.
-2. Computes the expected ontology embedding and description paths from `(agent.model.model_name, embedding.model)`.
+2. Computes ontology paths from `llm.to_artifact_key()` and `embedding.to_artifact_key()`.
 3. If `force_regenerate=True`, unlinks both the ontology embeddings NPZ and the descriptions JSON before proceeding.
 4. Loads the descriptions JSON (if present) and drops any blank entries so they can be retried.
 5. If every CL id has a non-blank description on disk and the embeddings NPZ already exists, returns immediately.
@@ -435,22 +451,35 @@ Keys: `embeddings`, `labels`, `metadata`.
 
 Files that lack the `labels` key (the legacy sidecar format) are rejected by `load_user_embeddings`. `CyteOnto.purge_stale()` deletes them.
 
-### Descriptions JSON
+### Descriptions JSON (schema v3)
 
 ```json
 {
-  "<key>": {
-    "initialLabel": "...",
-    "descriptiveName": "...",
-    "function": "...",
-    "diseaseRelevance": "...",
-    "developmentalStage": "..."
+  "schemaVersion": "3.0",
+  "artifactKey": {
+    "provider": "together",
+    "model": "moonshotai/Kimi-K2.6",
+    "company": "moonshotai",
+    "modelName": "Kimi-K2.6"
+  },
+  "updatedAt": "2026-05-28T12:00:00+00:00",
+  "descriptions": {
+    "CL:0000001": {
+      "initialLabel": "...",
+      "descriptiveName": "...",
+      "function": "...",
+      "diseaseRelevance": "...",
+      "developmentalStage": "..."
+    }
   }
 }
 ```
 
-- For ontology descriptions, `<key>` is the CL id.
-- For user descriptions, `<key>` is the label the caller passed to `compare`.
+Legacy flat JSON files are not loaded. For ontology entries, keys under `descriptions` are CL ids; for user files, keys are the raw label strings passed to `compare`.
+
+### NPZ metadata (schema v3)
+
+`metadata` includes `schemaVersion`, `llm`, and `embedding` artifact key dicts (`provider`, `model`, `company`, `modelName`), plus `num_embeddings` and `embedding_dim`.
 
 ---
 
@@ -465,27 +494,29 @@ Set via `PathConfig(data_dir=..., user_dir=...)`:
 │   └── cl.owl                         shipped
 └── embedding/
     ├── cell_ontology/
-    │   └── embeddings_<text>_<embd>.npz       generated once per model pair
+    │   └── embeddings_<llmKey>_<embdKey>.npz
     └── descriptions/
-        └── descriptions_<text>.json           generated once per text model
+        └── descriptions_<llmKey>.json
 
 <user_dir>/                             defaults to <data_dir>/user_files
 ├── embeddings/
 │   └── <run_id>/
-│       ├── author/author_embeddings_<text>_<embd>.npz
-│       └── algorithm/<algo_name>_embeddings_<text>_<embd>.npz
+│       ├── author/author_embeddings_<llmKey>_<embdKey>.npz
+│       └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
 └── descriptions/
     └── <run_id>/
-        ├── author/author_descriptions_<text>.json
-        └── algorithm/<algo_name>_descriptions_<text>.json
+        ├── author/author_descriptions_<llmKey>.json
+        └── algorithm/<algo_name>_descriptions_<llmKey>.json
 ```
 
-Filename rules (`paths._clean_model`, `paths._clean_identifier`):
+Filename rules (`ModelArtifactKey.filename_segment`, `paths._clean_identifier`):
 
-- Model names preserve case and dots. `/` and `:` become `-`, space becomes `_`.
-  Example: `moonshotai/kimi-k2.5` becomes `moonshotai-kimi-k2.5`.
-- Identifiers (`run_id`, algorithm keys) also replace `.` with `_` to keep directory names conservative.
+- Artifact key segment: `{provider}_{company}-{modelName}` after sanitizing `/`, `:`, and spaces.
+  Example: provider `together`, model `moonshotai/Kimi-K2.6` → `together_moonshotai-Kimi-K2.6`.
+- Identifiers (`run_id`, algorithm keys) also replace `.` with `_`.
   Example: `sample.run.001` becomes `sample_run_001`.
+
+Pre-v3 caches (`descriptions_moonshotai-Kimi-K2.6.json`, etc.) are ignored. Delete them or use a fresh `data_dir`, then rerun `from_config` or `uv run python cyteonto/setup.py`.
 
 ---
 

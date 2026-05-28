@@ -16,7 +16,7 @@ from .config import Config
 from .describe import describe_cells
 from .embed import embed_texts
 from .logger import logger
-from .models import AgentUsage, CellDescription, EmbdConfig
+from .models import AgentUsage, CellDescription, EmbdConfig, LlmConfig, ModelArtifactKey
 from .ontology import OntologyMapping, OntologySimilarity
 from .paths import PathConfig, _clean_identifier
 
@@ -28,7 +28,7 @@ class CyteOnto:
 
     Typical use::
 
-        cyto = await CyteOnto.from_config(agent=agent, embedding=embd_cfg)
+        cyto = await CyteOnto.from_config(agent=agent, embedding=embd_cfg, llm=llm_cfg)
         results = await cyto.compare(
             run_id="sample_run",
             author_labels=[...],
@@ -40,6 +40,7 @@ class CyteOnto:
         self,
         agent: Agent,
         embedding: EmbdConfig,
+        llm: LlmConfig,
         data_dir: str | Path | None = None,
         user_dir: str | Path | None = None,
         max_description_concurrency: int = 100,
@@ -48,6 +49,7 @@ class CyteOnto:
     ) -> None:
         self.agent = agent
         self.embedding = embedding
+        self.llm = llm
         if self.embedding.apiKey is None:
             self.embedding = embedding.model_copy(
                 update={"apiKey": config.EMBEDDING_API_KEY}
@@ -59,13 +61,22 @@ class CyteOnto:
                 "Pass it via EmbdConfig(apiKey=...) or set EMBEDDING_MODEL_API_KEY."
             )
 
+        agent_model = str(agent.model.model_name)  # type: ignore
+        if llm.model != agent_model:
+            raise ValueError(
+                f"LlmConfig.model ({llm.model!r}) does not match "
+                f"agent.model.model_name ({agent_model!r}). "
+                "Align them so cache keys match the agent in use."
+            )
+
+        self.llm_key: ModelArtifactKey = llm.to_artifact_key()
+        self.embd_key: ModelArtifactKey = self.embedding.to_artifact_key()
         self.paths = PathConfig(data_dir, user_dir)
-        self.text_model: str = str(agent.model.model_name)  # type: ignore
         self.max_description_concurrency = max_description_concurrency
         self.use_pubmed_tool = use_pubmed_tool
         self.reasoning = reasoning
         self.mapping = OntologyMapping(self.paths.ontology_csv)
-        self.usage = AgentUsage(agentName="CyteOnto", modelName=self.text_model)
+        self.usage = AgentUsage(agentName="CyteOnto", modelName=llm.model)
 
         self._similarity: OntologySimilarity | None = None
         self._ontology_embeddings: np.ndarray | None = None
@@ -78,6 +89,7 @@ class CyteOnto:
         cls,
         agent: Agent,
         embedding: EmbdConfig,
+        llm: LlmConfig,
         data_dir: str | Path | None = None,
         user_dir: str | Path | None = None,
         force_regenerate: bool = False,
@@ -92,6 +104,7 @@ class CyteOnto:
         self = cls(
             agent=agent,
             embedding=embedding,
+            llm=llm,
             data_dir=data_dir,
             user_dir=user_dir,
             max_description_concurrency=max_description_concurrency,
@@ -107,8 +120,8 @@ class CyteOnto:
                 f"Core ontology files missing under {self.paths.data_dir}/cell_ontology/"
             )
 
-        emb_path = self.paths.ontology_embeddings(self.text_model, self.embedding.model)
-        desc_path = self.paths.ontology_descriptions(self.text_model)
+        emb_path = self.paths.ontology_embeddings(self.llm_key, self.embd_key)
+        desc_path = self.paths.ontology_descriptions(self.llm_key)
 
         if force_regenerate:
             for p in (emb_path, desc_path):
@@ -151,7 +164,7 @@ class CyteOnto:
             for oid, desc in zip(missing_ids, desc_list):
                 if not desc.is_blank():
                     existing[oid] = desc
-            storage.save_descriptions(desc_path, existing)
+            storage.save_descriptions(desc_path, existing, self.llm_key)
 
         # Embed every id. Use the joined label as a last-resort fallback when
         # a description is still blank so the array stays aligned with `ids`.
@@ -181,18 +194,16 @@ class CyteOnto:
             emb_path,
             embeddings,
             ids,
-            extra_metadata={
-                "text_model": self.text_model,
-                "embedding_model": self.embedding.model,
-                "embedding_provider": self.embedding.provider,
-            },
+            self.llm_key,
+            self.embd_key,
+            extra_metadata={"reasoning": self.reasoning},
         )
 
     # lazy loaders
 
     def _load_ontology_embeddings(self) -> tuple[np.ndarray, list[str]]:
         if self._ontology_embeddings is None or self._ontology_ids is None:
-            path = self.paths.ontology_embeddings(self.text_model, self.embedding.model)
+            path = self.paths.ontology_embeddings(self.llm_key, self.embd_key)
             loaded = storage.load_ontology_embeddings(path)
             if loaded is None:
                 raise FileNotFoundError(
@@ -207,7 +218,7 @@ class CyteOnto:
             self._similarity = OntologySimilarity(
                 owl_path=self.paths.ontology_owl,
                 embeddings_path=self.paths.ontology_embeddings(
-                    self.text_model, self.embedding.model
+                    self.llm_key, self.embd_key
                 ),
             )
         return self._similarity
@@ -223,11 +234,9 @@ class CyteOnto:
         use_cache: bool,
     ) -> np.ndarray:
         emb_path = self.paths.user_embeddings(
-            run_id, kind, identifier, self.text_model, self.embedding.model
+            run_id, kind, identifier, self.llm_key, self.embd_key
         )
-        desc_path = self.paths.user_descriptions(
-            run_id, kind, identifier, self.text_model
-        )
+        desc_path = self.paths.user_descriptions(run_id, kind, identifier, self.llm_key)
 
         raw_existing = storage.load_descriptions(desc_path) if use_cache else None
         # Drop any pre-existing blank entries so they are retried below.
@@ -263,7 +272,7 @@ class CyteOnto:
             for lbl, desc in zip(missing, new_descs):
                 if not desc.is_blank():
                     existing[lbl] = desc
-            storage.save_descriptions(desc_path, existing)
+            storage.save_descriptions(desc_path, existing, self.llm_key)
 
         # Build the text to embed for every label position. Blanks are not
         # cached, so the raw label text is used as a fallback to keep the
@@ -311,10 +320,9 @@ class CyteOnto:
             emb_path,
             embeddings,
             labels,
+            self.llm_key,
+            self.embd_key,
             extra_metadata={
-                "text_model": self.text_model,
-                "embedding_model": self.embedding.model,
-                "embedding_provider": self.embedding.provider,
                 "reasoning": self.reasoning,
                 "run_id": run_id,
                 "kind": kind,
@@ -588,11 +596,9 @@ class CyteOnto:
             return removed
 
         emb_path = self.paths.user_embeddings(
-            run_id, kind, identifier, self.text_model, self.embedding.model
+            run_id, kind, identifier, self.llm_key, self.embd_key
         )
-        desc_path = self.paths.user_descriptions(
-            run_id, kind, identifier, self.text_model
-        )
+        desc_path = self.paths.user_descriptions(run_id, kind, identifier, self.llm_key)
         for p in (emb_path, desc_path):
             if p.exists():
                 p.unlink()

@@ -115,7 +115,7 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     """Execute one compare request end-to-end and update `status.json` at each stage."""
     from cyteonto import CyteOnto
     from cyteonto.logger import logger
-    from cyteonto.models import EmbdConfig
+    from cyteonto.models import EmbdConfig, LlmConfig
 
     status = _read_status(run_id)
     status.update({"state": "running", "startedAt": _utc_now()})
@@ -141,6 +141,10 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
         cyto = await CyteOnto.from_config(
             agent=agent,
             embedding=embedding,
+            llm=LlmConfig(
+                provider=payload["llmProvider"],
+                model=payload["llmModel"],
+            ),
             data_dir=app_config.REMOTE_DATA_DIR,
             user_dir=app_config.REMOTE_USER_DIR,
             max_description_concurrency=payload["maxDescriptionConcurrency"],
