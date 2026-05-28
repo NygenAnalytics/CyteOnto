@@ -28,7 +28,7 @@ class AppConfig:
     REMOTE_EMBEDDING_DIR: str = f"{VOLUME_MOUNT_PATH}/embedding"
 
     DEFAULT_LLM_PROVIDER: str = "together"
-    DEFAULT_LLM_MODEL: str = "moonshotai/Kimi-K2.5"
+    DEFAULT_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
     DEFAULT_EMBEDDING_PROVIDER: str = "openrouter"
     DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
 

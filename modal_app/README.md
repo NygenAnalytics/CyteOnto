@@ -143,7 +143,7 @@ uv run modal run -m modal_app --env cytetrainer setup
 uv run modal run -m modal_app --env cytetrainer setup --force
 ```
 
-`setup` downloads the CL CSV, the OWL file, and the precomputed Kimi-K2.5 descriptions and qwen3-embedding-8b embeddings into the `cyteonto` Modal volume. It is idempotent; `--force` overwrites existing files.
+`setup` downloads the CL CSV, the OWL file, and the precomputed Kimi-K2.6 descriptions and qwen3-embedding-8b embeddings into the `cyteonto` Modal volume. It is idempotent; `--force` overwrites existing files.
 
 ## Custom domain
 
@@ -195,7 +195,7 @@ Request body:
 | `authorLabels` | `list[str]` | yes | | Reference labels, one per item. |
 | `algorithms` | `dict[str, list[str]]` | yes | | Map of algorithm name to that algorithm's labels. Each list must have the same length as `authorLabels`. Algorithm names must be unique. |
 | `llmProvider` | `openrouter \| together \| openai` | no | `together` | OpenAI-compatible provider used for description generation. |
-| `llmModel` | `str` | no | `moonshotai/Kimi-K2.5` | Model name for the selected provider. |
+| `llmModel` | `str` | no | `moonshotai/Kimi-K2.6` | Model name for the selected provider. |
 | `llmApiKey` | `str \| null` | no | `null` | If omitted, the hosted `TOGETHER_API_KEY` secret is used when `llmProvider="together"`. Required for any other provider. |
 | `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together` | no | `openrouter` | Embedding backend. |
 | `embeddingModel` | `str` | no | `qwen/qwen3-embedding-8b` | Embedding model name. |
@@ -342,7 +342,7 @@ jq -n \
     authorLabels: ["alveolar macrophage", "regulatory T cell"],
     algorithms: { algo1: ["lung macrophage", "Treg"] },
     llmProvider: "together",
-    llmModel: "moonshotai/Kimi-K2.5",
+    llmModel: "moonshotai/Kimi-K2.6",
     llmApiKey: $llm_key,
     embeddingProvider: "openrouter",
     embeddingModel: "qwen/qwen3-embedding-8b",
@@ -447,7 +447,7 @@ Mounted at `/cyteonto_data` inside every container:
             └── algorithm/<algo_name>_descriptions_<text>.json
 ```
 
-`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.5`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.
+`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.
 
 You can inspect the volume directly:
 
@@ -466,7 +466,7 @@ All tunables live on `AppConfig` in `modal_app/config.py`:
 | `VOLUME_NAME` | `"cyteonto"` | Modal volume name. |
 | `VOLUME_MOUNT_PATH` | `"/cyteonto_data"` | Mount path inside containers. |
 | `DEFAULT_LLM_PROVIDER` | `"together"` | Default for requests that omit `llmProvider`. |
-| `DEFAULT_LLM_MODEL` | `"moonshotai/Kimi-K2.5"` | Default for requests that omit `llmModel`. |
+| `DEFAULT_LLM_MODEL` | `"moonshotai/Kimi-K2.6"` | Default for requests that omit `llmModel`. |
 | `DEFAULT_EMBEDDING_PROVIDER` | `"openrouter"` | Default for requests that omit `embeddingProvider`. |
 | `DEFAULT_EMBEDDING_MODEL` | `"qwen/qwen3-embedding-8b"` | Default for requests that omit `embeddingModel`. |
 | `SECRET_NAME` | `"cyteonto-secrets"` | Modal secret attached to the worker. Must expose `TOGETHER_API_KEY` and `OPENROUTER_API_KEY`. |

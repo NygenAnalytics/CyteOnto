@@ -1,4 +1,4 @@
-# cyteonto_new
+# cyteonto
 
 Semantic comparison of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html).
 
@@ -17,7 +17,7 @@ All LLM descriptions and embeddings are persisted on disk and reused across runs
 ## Package layout
 
 ```
-cyteonto_new/
+cyteonto/
 ├── __init__.py       Public exports
 ├── config.py         Environment variables (API keys, log level)
 ├── logger.py         Loguru configuration
@@ -55,7 +55,7 @@ Lower layers do not import higher ones. The `CyteOnto` class in `cyteonto.py` is
 
 ## Public API
 
-Imported from `cyteonto_new`:
+Imported from `cyteonto`:
 
 | Symbol              | Kind     | Purpose                                              |
 |---------------------|----------|------------------------------------------------------|
@@ -73,7 +73,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from cyteonto_new import CyteOnto, EmbdConfig
+from cyteonto import CyteOnto, EmbdConfig
 
 agent = Agent(
     OpenRouterModel(
@@ -181,7 +181,7 @@ The package uses `moonshotai/Kimi-K2.5` from `Together AI` as the suggested defa
 CyteOnto(
     agent: pydantic_ai.Agent,
     embedding: EmbdConfig,
-    data_dir: str | Path | None = None,   # defaults to cyteonto_new/data
+    data_dir: str | Path | None = None,   # defaults to cyteonto/data
     user_dir: str | Path | None = None,   # defaults to <data_dir>/user_files
     max_description_concurrency: int = 100,
     use_pubmed_tool: bool = True,

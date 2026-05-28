@@ -1,8 +1,8 @@
-"""Download shipped and precomputed assets into the cyteonto_new data tree.
+"""Download shipped and precomputed assets into the cyteonto data tree.
 
 Run:
-    uv run python cyteonto_new/setup.py
-    uv run python cyteonto_new/setup.py --force
+    uv run python cyteonto/setup.py
+    uv run python cyteonto/setup.py --force
 """
 
 import argparse
@@ -12,24 +12,21 @@ from pathlib import Path
 import requests
 from tqdm.auto import tqdm  # type: ignore
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from cyteonto_new.logger import logger  # noqa: E402
-from cyteonto_new.paths import PathConfig  # noqa: E402
+from .logger import logger  # noqa: E402
+from .paths import PathConfig  # noqa: E402
 
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
-DEFAULT_TEXT_MODEL: str = "moonshotai/Kimi-K2.5"
+DEFAULT_TEXT_MODEL: str = "moonshotai/Kimi-K2.6"
 DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
 
-# Paste the public Cloudflare URLs below. Each value must point to the raw file.
 ONTOLOGY_CSV_URL: str = f"{BASE_URL}/cell_ontology/cell_to_cell_ontology.csv"
 ONTOLOGY_OWL_URL: str = f"{BASE_URL}/cell_ontology/cl.owl"
 ONTOLOGY_DESCRIPTIONS_URL: str = (
-    f"{BASE_URL}/descriptions/descriptions_moonshotai-Kimi-K2.5.json"
+    f"{BASE_URL}/descriptions/descriptions_moonshotai-Kimi-K2.6.json"
 )
 ONTOLOGY_EMBEDDINGS_URL: str = (
-    f"{BASE_URL}/embeddings/embeddings_moonshotai-Kimi-K2.5_qwen-qwen3-embedding-8b.npz"
+    f"{BASE_URL}/embeddings/embeddings_moonshotai-Kimi-K2.6_qwen-qwen3-embedding-8b.npz"
 )
 
 
@@ -78,7 +75,7 @@ def main() -> int:
     parser.add_argument(
         "--data-dir",
         default=None,
-        help="Root data directory (defaults to cyteonto_new/data).",
+        help="Root data directory (defaults to cyteonto/data).",
     )
     args = parser.parse_args()
 
