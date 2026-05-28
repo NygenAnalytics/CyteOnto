@@ -14,6 +14,27 @@ load_dotenv()
 
 
 class Config:
+    SCHEMA_VERSION: str = "3.0"
+    PRIMARY_LLM_PROVIDER: str = "nebius"
+    PRIMARY_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
+    PRIMARY_EMBEDDING_PROVIDER: str = "nebius"
+    PRIMARY_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+
+    FALLBACK_LLM_PROVIDER: str = "fireworks"
+    FALLBACK_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
+    FALLBACK_EMBEDDING_PROVIDER: str = "openrouter"
+    FALLBACK_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+
+    PROVIDER_API_KEY_ENV: dict[str, str] = {
+        "nebius": "NEBIUS_API_KEY",
+        "fireworks": "FIREWORKS_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "together": "TOGETHER_API_KEY",
+        "deepinfra": "DEEPINFRA_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "google": "GOOGLE_API_KEY",
+    }
+
     EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_MODEL_API_KEY", "")
     NCBI_API_KEY: str = os.getenv("NCBI_API_KEY", "")
     LOG_LEVEL: str = os.getenv("CYTEONTO_LOG_LEVEL", "DEBUG")

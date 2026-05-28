@@ -12,14 +12,22 @@ from pathlib import Path
 import requests
 from tqdm.auto import tqdm  # type: ignore
 
+from .config import Config  # noqa: E402
 from .logger import logger  # noqa: E402
 from .models import EmbdConfig, LlmConfig  # noqa: E402
 from .paths import PathConfig, artifact_key_segment  # noqa: E402
 
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
-DEFAULT_LLM = LlmConfig(provider="together", model="moonshotai/Kimi-K2.6")
-DEFAULT_EMBEDDING = EmbdConfig()
+_cfg = Config()
+DEFAULT_LLM = LlmConfig(
+    provider=_cfg.PRIMARY_LLM_PROVIDER, model=_cfg.PRIMARY_LLM_MODEL
+)
+DEFAULT_EMBEDDING = EmbdConfig(
+    provider=_cfg.PRIMARY_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
+    model=_cfg.PRIMARY_EMBEDDING_MODEL,
+    modelSettings={},
+)
 
 DEFAULT_LLM_KEY = DEFAULT_LLM.to_artifact_key()
 DEFAULT_EMBD_KEY = DEFAULT_EMBEDDING.to_artifact_key()

@@ -1,5 +1,6 @@
 """High-level CyteOnto orchestrator."""
 
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -16,11 +17,27 @@ from .config import Config
 from .describe import describe_cells
 from .embed import embed_texts
 from .logger import logger
-from .models import AgentUsage, CellDescription, EmbdConfig, LlmConfig, ModelArtifactKey
+from .models import (
+    AgentUsage,
+    CellDescription,
+    EmbdConfig,
+    LlmConfig,
+    ModelArtifactKey,
+    ModelPairUsage,
+)
 from .ontology import OntologyMapping, OntologySimilarity
 from .paths import PathConfig, _clean_identifier
 
 config = Config()
+
+
+def _api_key_for_provider(provider: str, fallback: str = "") -> str | None:
+    env_var = config.PROVIDER_API_KEY_ENV.get(provider)
+    if env_var:
+        key = os.getenv(env_var, "")
+        if key:
+            return key
+    return fallback or None
 
 
 class CyteOnto:
@@ -46,13 +63,30 @@ class CyteOnto:
         max_description_concurrency: int = 100,
         use_pubmed_tool: bool = True,
         reasoning: bool = False,
+        fallback_agent: Agent | None = None,
+        fallback_embedding: EmbdConfig | None = None,
+        fallback_llm: LlmConfig | None = None,
     ) -> None:
         self.agent = agent
         self.embedding = embedding
         self.llm = llm
+        self.fallback_agent = fallback_agent
+        self.fallback_embedding = fallback_embedding
+        self.fallback_llm = fallback_llm
+        self._llm_primary_used = False
+
         if self.embedding.apiKey is None:
-            self.embedding = embedding.model_copy(
-                update={"apiKey": config.EMBEDDING_API_KEY}
+            resolved = _api_key_for_provider(
+                self.embedding.provider, config.EMBEDDING_API_KEY
+            )
+            self.embedding = embedding.model_copy(update={"apiKey": resolved})
+
+        if self.fallback_embedding is not None and self.fallback_embedding.apiKey is None:
+            fb_key = _api_key_for_provider(
+                self.fallback_embedding.provider, config.EMBEDDING_API_KEY
+            )
+            self.fallback_embedding = self.fallback_embedding.model_copy(
+                update={"apiKey": fb_key}
             )
 
         if self.embedding.provider != "ollama" and not self.embedding.apiKey:
@@ -77,10 +111,73 @@ class CyteOnto:
         self.reasoning = reasoning
         self.mapping = OntologyMapping(self.paths.ontology_csv)
         self.usage = AgentUsage(agentName="CyteOnto", modelName=llm.model)
+        self.model_pair_usage = ModelPairUsage(llm=llm, embedding=self.embedding)
 
         self._similarity: OntologySimilarity | None = None
         self._ontology_embeddings: np.ndarray | None = None
         self._ontology_ids: list[str] | None = None
+
+    def _record_llm_tier(self, used_fallback: bool) -> None:
+        if not used_fallback:
+            self._llm_primary_used = True
+            return
+        if self._llm_primary_used:
+            self.model_pair_usage.llmTier = "mixed"
+            if self.fallback_llm:
+                self.model_pair_usage.llm = self.fallback_llm
+        else:
+            self.model_pair_usage.llmTier = "fallback"
+            if self.fallback_llm:
+                self.model_pair_usage.llm = self.fallback_llm
+
+    async def _describe_labels(
+        self, labels: list[str]
+    ) -> tuple[list[CellDescription], AgentUsage]:
+        if not labels:
+            return [], AgentUsage(agentName="CellDescriptionAgent")
+        descs, usage = await describe_cells(
+            base_agent=self.agent,
+            labels=labels,
+            use_pubmed=self.use_pubmed_tool,
+            max_concurrent=self.max_description_concurrency,
+            reasoning=self.reasoning,
+        )
+        self._record_llm_tier(used_fallback=False)
+        if self.fallback_agent:
+            blank_indices = [i for i, d in enumerate(descs) if d.is_blank()]
+            if blank_indices:
+                retry_labels = [labels[i] for i in blank_indices]
+                retry_descs, retry_usage = await describe_cells(
+                    base_agent=self.fallback_agent,
+                    labels=retry_labels,
+                    use_pubmed=self.use_pubmed_tool,
+                    max_concurrent=self.max_description_concurrency,
+                    reasoning=self.reasoning,
+                )
+                usage.merge(retry_usage)
+                for idx, desc in zip(blank_indices, retry_descs):
+                    if not desc.is_blank():
+                        descs[idx] = desc
+                self._record_llm_tier(used_fallback=True)
+        return descs, usage
+
+    async def _embed_with_failover(self, texts: list[str]) -> np.ndarray | None:
+        emb = await embed_texts(texts, self.embedding)
+        if emb is not None or self.fallback_embedding is None:
+            return emb
+        logger.warning(
+            f"Primary embedding failed (provider={self.embedding.provider}); "
+            f"trying fallback ({self.fallback_embedding.provider})"
+        )
+        emb = await embed_texts(texts, self.fallback_embedding)
+        if emb is not None:
+            self.embd_key = self.fallback_embedding.to_artifact_key()
+            self.model_pair_usage.embeddingTier = "fallback"
+            self.model_pair_usage.embedding = self.fallback_embedding
+            self._similarity = None
+            self._ontology_embeddings = None
+            self._ontology_ids = None
+        return emb
 
     # factory + setup
 
@@ -96,6 +193,9 @@ class CyteOnto:
         max_description_concurrency: int = 100,
         use_pubmed_tool: bool = True,
         reasoning: bool = False,
+        fallback_agent: Agent | None = None,
+        fallback_embedding: EmbdConfig | None = None,
+        fallback_llm: LlmConfig | None = None,
     ) -> "CyteOnto":
         """Build a ``CyteOnto`` and make sure the ontology embeddings are on disk.
 
@@ -110,6 +210,9 @@ class CyteOnto:
             max_description_concurrency=max_description_concurrency,
             use_pubmed_tool=use_pubmed_tool,
             reasoning=reasoning,
+            fallback_agent=fallback_agent,
+            fallback_embedding=fallback_embedding,
+            fallback_llm=fallback_llm,
         )
         await self._prepare_ontology(force_regenerate=force_regenerate)
         return self
@@ -153,13 +256,7 @@ class CyteOnto:
                 f"Generating {len(missing_indices)} ontology descriptions "
                 f"({len(ids) - len(missing_indices)} cached)"
             )
-            desc_list, sub_usage = await describe_cells(
-                base_agent=self.agent,
-                labels=missing_labels,
-                use_pubmed=self.use_pubmed_tool,
-                max_concurrent=self.max_description_concurrency,
-                reasoning=self.reasoning,
-            )
+            desc_list, sub_usage = await self._describe_labels(missing_labels)
             self.usage.merge(sub_usage)
             for oid, desc in zip(missing_ids, desc_list):
                 if not desc.is_blank():
@@ -186,10 +283,11 @@ class CyteOnto:
                 "they will be retried on the next CyteOnto.from_config(...)."
             )
 
-        embeddings = await embed_texts(texts, self.embedding)
+        embeddings = await self._embed_with_failover(texts)
         if embeddings is None:
             raise RuntimeError("Failed to generate ontology embeddings")
 
+        emb_path = self.paths.ontology_embeddings(self.llm_key, self.embd_key)
         storage.save_ontology_embeddings(
             emb_path,
             embeddings,
@@ -261,13 +359,7 @@ class CyteOnto:
                 f"({len(labels)} labels -> {len(unique_labels)} unique, "
                 f"{len(unique_labels) - len(missing)} cached)"
             )
-            new_descs, sub_usage = await describe_cells(
-                base_agent=self.agent,
-                labels=missing,
-                use_pubmed=self.use_pubmed_tool,
-                max_concurrent=self.max_description_concurrency,
-                reasoning=self.reasoning,
-            )
+            new_descs, sub_usage = await self._describe_labels(missing)
             self.usage.merge(sub_usage)
             for lbl, desc in zip(missing, new_descs):
                 if not desc.is_blank():
@@ -308,9 +400,12 @@ class CyteOnto:
                 f"({len(texts)} total label positions)"
             )
 
-        unique_embeddings = await embed_texts(unique_texts, self.embedding)
+        unique_embeddings = await self._embed_with_failover(unique_texts)
         if unique_embeddings is None:
             raise RuntimeError(f"Failed to embed labels for '{identifier}'")
+        emb_path = self.paths.user_embeddings(
+            run_id, kind, identifier, self.llm_key, self.embd_key
+        )
         fan_out_idx = np.fromiter(
             (text_to_idx[t] for t in texts), dtype=np.int64, count=len(texts)
         )

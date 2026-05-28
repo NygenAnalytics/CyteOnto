@@ -7,6 +7,7 @@ from .models import (
     EmbdConfig,
     LlmConfig,
     ModelArtifactKey,
+    ModelPairUsage,
 )
 
 __version__ = "0.2.0"
@@ -17,5 +18,6 @@ __all__ = [
     "EmbdConfig",
     "LlmConfig",
     "ModelArtifactKey",
+    "ModelPairUsage",
     "AgentUsage",
 ]

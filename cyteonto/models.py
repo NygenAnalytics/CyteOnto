@@ -7,11 +7,19 @@ from pydantic_ai.usage import RunUsage
 from .config import Config
 
 EmbdProvider: TypeAlias = Literal[
-    "deepinfra", "ollama", "openai", "google", "openrouter", "together"
+    "deepinfra",
+    "fireworks",
+    "nebius",
+    "ollama",
+    "openai",
+    "google",
+    "openrouter",
+    "together",
 ]
 
 config = Config()
 
+ModelPairTier: TypeAlias = Literal["primary", "fallback", "mixed"]
 
 def _sanitize_filename_part(value: str) -> str:
     """Normalise a single path segment. Preserves case and dots."""
@@ -111,7 +119,7 @@ class CellDescription(BaseModel):
 class DescriptionFileEnvelope(BaseModel):
     """On-disk wrapper for a descriptions JSON file (schema v3)."""
 
-    schemaVersion: str = Field(default="3.0")
+    schemaVersion: str = Field(default=config.SCHEMA_VERSION)
     artifactKey: ModelArtifactKey
     updatedAt: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -141,6 +149,25 @@ class EmbdConfig(BaseModel):
 
     def to_artifact_key(self) -> ModelArtifactKey:
         return ModelArtifactKey.from_provider_model(self.provider, self.model)
+
+
+class ModelPairUsage(BaseModel):
+    """Which model pair tiers were used during a run."""
+
+    llmTier: ModelPairTier = "primary"
+    embeddingTier: ModelPairTier = "primary"
+    llm: LlmConfig
+    embedding: EmbdConfig
+
+    def to_status_dict(self) -> dict[str, str]:
+        return {
+            "llmTier": self.llmTier,
+            "embeddingTier": self.embeddingTier,
+            "llmProvider": self.llm.provider,
+            "llmModel": self.llm.model,
+            "embeddingProvider": self.embedding.provider,
+            "embeddingModel": self.embedding.model,
+        }
 
 
 class AgentUsage(BaseModel):

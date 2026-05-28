@@ -181,6 +181,19 @@ LlmConfig(
 
 Cache filenames include both `provider` and the parsed `company` / `modelName` from `model`. The pydantic-ai `Agent` does not expose the routing provider reliably, so pass `LlmConfig` explicitly even when the agent uses a custom `base_url`.
 
+### Primary and fallback model pairs
+
+Constants in `config.py` define the hosted defaults:
+
+| Tier | LLM | Embeddings |
+|------|-----|------------|
+| Primary | `nebius` + `moonshotai/Kimi-K2.6` | `nebius` + `Qwen/Qwen3-Embedding-8B` |
+| Fallback | `fireworks` + `moonshotai/Kimi-K2.6` | `openrouter` + `Qwen/Qwen3-Embedding-8B` (DeepInfra routing) |
+
+Pass `fallback_agent`, `fallback_embedding`, and `fallback_llm` to `CyteOnto` / `from_config` to enable operation-level failover: blank descriptions after the primary passes are retried with the fallback agent; a failed primary embedding batch retries with the fallback embedding config (cache keys switch to the fallback embedding artifact key). Track usage via `cyto.model_pair_usage` (`llmTier`, `embeddingTier`, effective provider/model fields).
+
+Env vars: `NEBIUS_API_KEY`, `FIREWORKS_API_KEY`, `OPENROUTER_API_KEY` (see `PROVIDER_API_KEY_ENV` in `config.py`).
+
 ### Recommended LLM
 
 The package suggests `moonshotai/Kimi-K2.6` via Together or OpenRouter. Any pydantic-ai supported model works as long as `LlmConfig.model` matches the agent.

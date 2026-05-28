@@ -10,7 +10,7 @@ The service is live at:
 https://cyteonto.nygen.io
 ```
 
-API keys are optional. When you stick with the default providers (`together` for the LLM, `openrouter` for embeddings), the hosted `cyteonto-secrets` is used automatically. Bring your own keys only when you want to override the hosted defaults or switch provider.
+API keys are optional when the default primary pair is used (`nebius` for LLM and embeddings). The worker also configures a fallback pair (`fireworks` / `openrouter`) and records which tiers were used on `GET /status/{run_id}` as `modelPairUsage`. Bring your own keys only when overriding providers.
 
 ### Option A: Python client
 
@@ -194,10 +194,10 @@ Request body:
 |-------|------|----------|---------|-------|
 | `authorLabels` | `list[str]` | yes | | Reference labels, one per item. |
 | `algorithms` | `dict[str, list[str]]` | yes | | Map of algorithm name to that algorithm's labels. Each list must have the same length as `authorLabels`. Algorithm names must be unique. |
-| `llmProvider` | `openrouter \| together \| openai` | no | `together` | OpenAI-compatible provider used for description generation. |
+| `llmProvider` | `openrouter \| together \| openai \| nebius \| fireworks` | no | `nebius` | OpenAI-compatible provider used for description generation. |
 | `llmModel` | `str` | no | `moonshotai/Kimi-K2.6` | Model name for the selected provider. |
 | `llmApiKey` | `str \| null` | no | `null` | If omitted, the hosted `TOGETHER_API_KEY` secret is used when `llmProvider="together"`. Required for any other provider. |
-| `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together` | no | `openrouter` | Embedding backend. |
+| `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together \| nebius` | no | `nebius` | Embedding backend. |
 | `embeddingModel` | `str` | no | `qwen/qwen3-embedding-8b` | Embedding model name. |
 | `embeddingApiKey` | `str \| null` | no | `null` | If omitted, the hosted `OPENROUTER_API_KEY` secret is used when `embeddingProvider="openrouter"`. Required for any other provider except `ollama`. |
 | `embeddingModelSettings` | `dict \| null` | no | `null` | Merged into the embedding request body when `embeddingProvider=openrouter`. Pass `{}` to disable the default DeepInfra routing; pass your own `{"provider": {...}}` to customise. |
