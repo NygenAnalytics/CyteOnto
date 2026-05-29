@@ -21,7 +21,7 @@ class Config:
     PRIMARY_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
 
     FALLBACK_LLM_PROVIDER: str = "fireworks"
-    FALLBACK_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
+    FALLBACK_LLM_MODEL: str = "accounts/fireworks/models/kimi-k2p6"
     FALLBACK_EMBEDDING_PROVIDER: str = "openrouter"
     FALLBACK_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
 
