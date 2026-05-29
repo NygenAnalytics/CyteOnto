@@ -14,33 +14,69 @@ from tqdm.auto import tqdm  # type: ignore
 
 from .config import Config  # noqa: E402
 from .logger import logger  # noqa: E402
-from .models import EmbdConfig, LlmConfig  # noqa: E402
+from .models import EmbdConfig, LlmConfig, ModelArtifactKey  # noqa: E402
 from .paths import PathConfig, artifact_key_segment  # noqa: E402
 
+# Nygen public R2 bucket for CyteOnto v2
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
 _cfg = Config()
-DEFAULT_LLM = LlmConfig(
+
+PRIMARY_LLM = LlmConfig(
     provider=_cfg.PRIMARY_LLM_PROVIDER, model=_cfg.PRIMARY_LLM_MODEL
 )
-DEFAULT_EMBEDDING = EmbdConfig(
+PRIMARY_EMBEDDING = EmbdConfig(
     provider=_cfg.PRIMARY_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
     model=_cfg.PRIMARY_EMBEDDING_MODEL,
     modelSettings={},
 )
 
-DEFAULT_LLM_KEY = DEFAULT_LLM.to_artifact_key()
-DEFAULT_EMBD_KEY = DEFAULT_EMBEDDING.to_artifact_key()
+BACKUP_LLM = LlmConfig(
+    provider=_cfg.FALLBACK_LLM_PROVIDER, model=_cfg.FALLBACK_LLM_MODEL
+)
+BACKUP_EMBEDDING = EmbdConfig(
+    provider=_cfg.FALLBACK_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
+    model=_cfg.FALLBACK_EMBEDDING_MODEL,
+)
+
+PRIMARY_LLM_KEY = PRIMARY_LLM.to_artifact_key()
+PRIMARY_EMBD_KEY = PRIMARY_EMBEDDING.to_artifact_key()
+BACKUP_LLM_KEY = BACKUP_LLM.to_artifact_key()
+BACKUP_EMBD_KEY = BACKUP_EMBEDDING.to_artifact_key()
 
 ONTOLOGY_CSV_URL: str = f"{BASE_URL}/cell_ontology/cell_to_cell_ontology.csv"
 ONTOLOGY_OWL_URL: str = f"{BASE_URL}/cell_ontology/cl.owl"
-ONTOLOGY_DESCRIPTIONS_URL: str = (
-    f"{BASE_URL}/descriptions/descriptions_{artifact_key_segment(DEFAULT_LLM_KEY)}.json"
-)
-ONTOLOGY_EMBEDDINGS_URL: str = (
-    f"{BASE_URL}/embeddings/embeddings_{artifact_key_segment(DEFAULT_LLM_KEY)}_"
-    f"{artifact_key_segment(DEFAULT_EMBD_KEY)}.npz"
-)
+
+
+def _descriptions_url(llm_key: ModelArtifactKey) -> str:
+    return f"{BASE_URL}/descriptions/descriptions_{artifact_key_segment(llm_key)}.json"
+
+
+def _embeddings_url(llm_key: ModelArtifactKey, embd_key: ModelArtifactKey) -> str:
+    return (
+        f"{BASE_URL}/embeddings/embeddings_{artifact_key_segment(llm_key)}_"
+        f"{artifact_key_segment(embd_key)}.npz"
+    )
+
+
+def _ontology_artifact_targets(paths: PathConfig) -> list[tuple[str, Path]]:
+    """Primary and backup description + embedding files on the CDN."""
+    pairs: list[tuple[ModelArtifactKey, ModelArtifactKey]] = [
+        (PRIMARY_LLM_KEY, PRIMARY_EMBD_KEY),
+        (BACKUP_LLM_KEY, BACKUP_EMBD_KEY),
+    ]
+    targets: list[tuple[str, Path]] = []
+    for llm_key, embd_key in pairs:
+        targets.append(
+            (_descriptions_url(llm_key), paths.ontology_descriptions(llm_key))
+        )
+        targets.append(
+            (
+                _embeddings_url(llm_key, embd_key),
+                paths.ontology_embeddings(llm_key, embd_key),
+            )
+        )
+    return targets
 
 
 def _download(url: str, destination: Path, *, force: bool) -> bool:
@@ -97,14 +133,7 @@ def main() -> int:
     targets = [
         (ONTOLOGY_CSV_URL, paths.ontology_csv),
         (ONTOLOGY_OWL_URL, paths.ontology_owl),
-        (
-            ONTOLOGY_DESCRIPTIONS_URL,
-            paths.ontology_descriptions(DEFAULT_LLM_KEY),
-        ),
-        (
-            ONTOLOGY_EMBEDDINGS_URL,
-            paths.ontology_embeddings(DEFAULT_LLM_KEY, DEFAULT_EMBD_KEY),
-        ),
+        *_ontology_artifact_targets(paths),
     ]
 
     failures: list[str] = []

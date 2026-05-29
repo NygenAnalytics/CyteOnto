@@ -83,7 +83,19 @@ def build_cyteonto_image() -> modal.Image:
             str(app_config.CYTEONTO_DIR),
             "/root/cyteonto",
             copy=True,
-            ignore=["*.ipynb", "*.npz", "*.json", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", "__pycache__/", "notebooks/", "tmp/", "tests/"]
+            ignore=[
+                "*.ipynb",
+                "*.npz",
+                "*.json",
+                ".venv/",
+                ".pytest_cache/",
+                ".mypy_cache/",
+                ".ruff_cache/",
+                "__pycache__/",
+                "notebooks/",
+                "tmp/",
+                "tests/",
+            ],
         )
         .add_local_file(
             str(app_config.PYPROJECT_PATH),

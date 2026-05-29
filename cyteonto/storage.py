@@ -174,13 +174,11 @@ def load_descriptions(path: Path) -> dict[str, CellDescription] | None:
         if raw.get("schemaVersion") != "3.0":
             logger.error(
                 f"Descriptions at {path} have unsupported schemaVersion "
-                f"{raw.get('schemaVersion')!r}; expected {"3.0"!r}."
+                f"{raw.get('schemaVersion')!r}; expected {'3.0'!r}."
             )
             return None
         envelope = DescriptionFileEnvelope.model_validate(raw)
-        logger.info(
-            f"Loaded {len(envelope.descriptions)} descriptions from {path}"
-        )
+        logger.info(f"Loaded {len(envelope.descriptions)} descriptions from {path}")
         return envelope.descriptions
     except Exception as e:
         logger.error(f"Failed to load descriptions from {path}: {e}")

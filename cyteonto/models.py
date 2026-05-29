@@ -21,6 +21,7 @@ config = Config()
 
 ModelPairTier: TypeAlias = Literal["primary", "fallback", "mixed"]
 
+
 def _sanitize_filename_part(value: str) -> str:
     """Normalise a single path segment. Preserves case and dots."""
     return value.replace("/", "-").replace(":", "-").replace(" ", "_")

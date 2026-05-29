@@ -5,10 +5,13 @@ from pathlib import Path
 
 import requests
 
-BASE_URL = os.environ.get("CYTEONTO_URL", "https://cyteonto.nygen.io")
+from .config import AppConfig
 
-LLM_API_KEY = None  # or  os.environ.get("LLM_API_KEY")
-EMBEDDING_API_KEY = None  # or  os.environ.get("EMBEDDING_MODEL_API_KEY")
+_cfg = AppConfig()
+BASE_URL = os.environ.get("CYTEONTO_URL", "https://cyteonto.nygen.io").rstrip("/")
+
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
+EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY")
 
 PAYLOAD: dict = {
     "authorLabels": [
@@ -20,10 +23,14 @@ PAYLOAD: dict = {
         "algo1": ["lung macrophage", "Treg", "CD8 T cell"],
         "algo2": ["alveolar mac", "T regulatory cell", "cytotoxic T cell"],
     },
+    "llmProvider": _cfg.DEFAULT_LLM_PROVIDER,
+    "llmModel": _cfg.DEFAULT_LLM_MODEL,
+    "embeddingProvider": _cfg.DEFAULT_EMBEDDING_PROVIDER,
+    "embeddingModel": _cfg.DEFAULT_EMBEDDING_MODEL,
     "maxDescriptionConcurrency": 50,
     "embeddingMaxConcurrent": 50,
-    # Using Default Providers and modal secrets API keys.
-    # Check out README for more details.
+    "usePubmedTool": False,
+    "reasoning": False,
 }
 
 POLL_INTERVAL_S = 10
@@ -53,6 +60,8 @@ def poll(run_id: str, interval_s: int, timeout_s: int) -> dict:
         status = resp.json()
         if status["state"] != last_state:
             print(f"[status] {status['state']}")
+            if status["state"] == "completed" and status.get("modelPairUsage"):
+                print(f"[status] modelPairUsage={status['modelPairUsage']}")
             last_state = status["state"]
         if status["state"] in ("completed", "failed"):
             return status
@@ -75,6 +84,9 @@ def fetch_result(run_id: str, fmt: str, out_dir: Path) -> Path:
 
 
 def main() -> int:
+    health = requests.get(f"{BASE_URL}/health", timeout=15)
+    health.raise_for_status()
+
     run_id = submit(PAYLOAD)
     status = poll(run_id, POLL_INTERVAL_S, POLL_TIMEOUT_S)
 

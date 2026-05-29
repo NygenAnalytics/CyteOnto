@@ -17,6 +17,7 @@ from .models import CompareRequest, CompareResponse, StatusResponse
 app_config = AppConfig()
 cyte_config = CyteConfig()
 
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -65,7 +66,10 @@ def create_app(volume, run_compare_fn) -> FastAPI:
                     f"expected {len(req.authorLabels)}",
                 )
 
-        if req.llmApiKey is None and req.llmProvider not in cyte_config.PROVIDER_API_KEY_ENV:
+        if (
+            req.llmApiKey is None
+            and req.llmProvider not in cyte_config.PROVIDER_API_KEY_ENV
+        ):
             raise HTTPException(
                 400,
                 (

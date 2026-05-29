@@ -81,7 +81,10 @@ class CyteOnto:
             )
             self.embedding = embedding.model_copy(update={"apiKey": resolved})
 
-        if self.fallback_embedding is not None and self.fallback_embedding.apiKey is None:
+        if (
+            self.fallback_embedding is not None
+            and self.fallback_embedding.apiKey is None
+        ):
             fb_key = _api_key_for_provider(
                 self.fallback_embedding.provider, config.EMBEDDING_API_KEY
             )
