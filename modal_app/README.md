@@ -1,4 +1,4 @@
-# modal_app
+# Modal Service
 
 Modal deployment of the `cyteonto` package as an HTTP service.
 
@@ -22,7 +22,7 @@ uv run python -m modal_app.example
 
 ### Option B: curl
 
-Send a minimal compare request (no keys required):
+Send a compare request:
 
 ```bash
 export CYTEONTO_URL="https://cyteonto.nygen.io"
@@ -41,13 +41,13 @@ curl -sS -X POST "$CYTEONTO_URL/compare" \
 Response:
 
 ```json
-{ "runId": "run-<uuid4>", "state": "queued" }
+{ "runId": "run-<uuid>", "state": "queued" }
 ```
 
 Save the `runId` and poll status:
 
 ```bash
-RUN_ID="run-<uuid4>"
+RUN_ID="run-<uuid>"
 curl -sS "$CYTEONTO_URL/status/$RUN_ID" | jq
 ```
 
@@ -61,19 +61,7 @@ curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=csv" -o "$RUN_ID.csv"
 For override patterns (your own keys, different provider, custom metric parameters), see the [example curl calls](#example-curl-calls) section below. The full request and response schema is in the [API reference](#api-reference).
 
 
-## What is CyteOnto
-
-`cyteonto` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given parallel label lists from a study author and one or more annotation algorithms, it:
-
-1. Generates a structured description for every label with an LLM.
-2. Embeds those descriptions with a configured embedding model.
-3. Matches each embedding to the closest CL term.
-4. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings).
-5. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
-
-All LLM descriptions and embeddings are cached on disk keyed by the text and embedding model names, so a second call with the same models reuses prior work.
-
-## What this service provides
+# What this service provides
 
 A Modal app named `cyteonto-api` that exposes three HTTP endpoints:
 
@@ -213,7 +201,7 @@ Request body:
 Response:
 
 ```json
-{ "runId": "run-<uuid4>", "state": "queued" }
+{ "runId": "run-<uuid>", "state": "queued" }
 ```
 
 Validation errors return `400` with a JSON `detail` message (for example mismatched label lengths).
