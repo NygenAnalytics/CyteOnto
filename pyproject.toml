@@ -38,3 +38,7 @@ dependencies = [
 dev = [
     "seaborn>=0.13.2",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

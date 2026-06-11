@@ -1,53 +1,39 @@
-import importlib
-import os
-import sys
-from unittest.mock import patch
+"""Tests for cyteonto.config.Config (schema v3 defaults)."""
 
-from cyteonto.config import CONFIG, Config
+from cyteonto.config import Config
 
 
 class TestConfig:
-    """Test configuration management."""
+    def test_schema_version(self):
+        assert Config.SCHEMA_VERSION == "3.0"
 
-    @patch.dict(os.environ, {"NCBI_API_KEY": "", "EMBEDDING_MODEL_API_KEY": ""})
-    def test_default_config(self):
-        """Test default configuration values."""
-        # Reload the module to pick up the mocked environment variables
-        if "cyteonto.config" in sys.modules:
-            importlib.reload(sys.modules["cyteonto.config"])
+    def test_primary_and_fallback_presets(self):
+        cfg = Config()
+        assert cfg.PRIMARY_LLM_PROVIDER == "nebius"
+        assert cfg.PRIMARY_EMBEDDING_PROVIDER == "nebius"
+        assert cfg.FALLBACK_LLM_PROVIDER == "fireworks"
+        assert cfg.FALLBACK_EMBEDDING_PROVIDER == "openrouter"
 
-        from cyteonto.config import Config
+    def test_provider_api_key_env_mapping(self):
+        cfg = Config()
+        assert cfg.PROVIDER_API_KEY_ENV["nebius"] == "NEBIUS_API_KEY"
+        assert cfg.PROVIDER_API_KEY_ENV["fireworks"] == "FIREWORKS_API_KEY"
+        assert cfg.PROVIDER_API_KEY_ENV["openrouter"] == "OPENROUTER_API_KEY"
 
-        config = Config()
-        assert config.NCBI_API_KEY == ""
-        assert config.EMBEDDING_MODEL_API_KEY == ""
-        assert config.LOGGING_LEVEL == "INFO"
-        assert config.LOG_FILE is None
+    def test_provider_urls_present_for_known_providers(self):
+        cfg = Config()
+        for provider in ("nebius", "deepinfra", "openrouter", "openai", "google", "ollama", "together"):
+            assert provider in cfg._PROVIDER_URL
+            assert cfg._PROVIDER_URL[provider].startswith(("http://", "https://"))
 
-    def test_config_with_env_vars(self, mock_env_vars):
-        """Test configuration with environment variables."""
-        config = Config()
-        # Note: Config loads env vars at class creation, so we need to reload
-        # In practice, this would be loaded when the module is first imported
-        assert hasattr(config, "NCBI_API_KEY")
-        assert hasattr(config, "EMBEDDING_MODEL_API_KEY")
+    def test_result_columns_shape(self):
+        cfg = Config()
+        assert cfg.RESULT_COLUMNS[0] == "run_id"
+        assert "cytescore_similarity" in cfg.RESULT_COLUMNS
+        assert "similarity_method" in cfg.RESULT_COLUMNS
+        assert len(cfg.RESULT_COLUMNS) == len(set(cfg.RESULT_COLUMNS))
 
-    def test_singleton_config(self):
-        """Test that CONFIG is a singleton instance."""
-        assert isinstance(CONFIG, Config)
-        assert CONFIG.LOGGING_LEVEL == "INFO"
-
-    @patch.dict(
-        os.environ,
-        {"NCBI_API_KEY": "test_key", "EMBEDDING_MODEL_API_KEY": "embedding_key"},
-    )
-    def test_config_env_loading(self):
-        """Test that config properly loads environment variables."""
-        # Create a fresh config instance
-        config = Config()
-        # Since dotenv.load_dotenv() is called in the module,
-        # we're testing the structure, not the actual loading
-        assert hasattr(config, "NCBI_API_KEY")
-        assert hasattr(config, "EMBEDDING_MODEL_API_KEY")
-        assert hasattr(config, "LOGGING_LEVEL")
-        assert hasattr(config, "LOG_FILE")
+    def test_openrouter_routing_default(self):
+        cfg = Config()
+        routing = cfg.OPENROUTER_DEEPINFRA_ROUTING
+        assert routing["provider"]["order"] == ["deepinfra"]

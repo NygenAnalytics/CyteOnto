@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from cyteonto.models.tools.pubmed import get_pubmed_abstracts
+from cyteonto.describe import get_pubmed_abstracts
 
 
 class TestPubMedTools:
