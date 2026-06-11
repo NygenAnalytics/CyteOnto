@@ -1,4 +1,4 @@
-# modal_app
+# Modal Service
 
 Modal deployment of the `cyteonto` package as an HTTP service.
 
@@ -10,7 +10,7 @@ The service is live at:
 https://cyteonto.nygen.io
 ```
 
-API keys are optional. When you stick with the default providers (`together` for the LLM, `openrouter` for embeddings), the hosted `cyteonto-secrets` is used automatically. Bring your own keys only when you want to override the hosted defaults or switch provider.
+API keys are optional when the default primary pair is used (`nebius` for LLM and embeddings). The worker also configures a fallback pair (`fireworks` / `openrouter`) and records which tiers were used on `GET /status/{run_id}` as `modelPairUsage`. Bring your own keys only when overriding providers.
 
 ### Option A: Python client
 
@@ -22,7 +22,7 @@ uv run python -m modal_app.example
 
 ### Option B: curl
 
-Send a minimal compare request (no keys required):
+Send a compare request:
 
 ```bash
 export CYTEONTO_URL="https://cyteonto.nygen.io"
@@ -41,13 +41,13 @@ curl -sS -X POST "$CYTEONTO_URL/compare" \
 Response:
 
 ```json
-{ "runId": "run-<uuid4>", "state": "queued" }
+{ "runId": "run-<uuid>", "state": "queued" }
 ```
 
 Save the `runId` and poll status:
 
 ```bash
-RUN_ID="run-<uuid4>"
+RUN_ID="run-<uuid>"
 curl -sS "$CYTEONTO_URL/status/$RUN_ID" | jq
 ```
 
@@ -61,19 +61,7 @@ curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=csv" -o "$RUN_ID.csv"
 For override patterns (your own keys, different provider, custom metric parameters), see the [example curl calls](#example-curl-calls) section below. The full request and response schema is in the [API reference](#api-reference).
 
 
-## What is CyteOnto
-
-`cyteonto` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given parallel label lists from a study author and one or more annotation algorithms, it:
-
-1. Generates a structured description for every label with an LLM.
-2. Embeds those descriptions with a configured embedding model.
-3. Matches each embedding to the closest CL term.
-4. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings).
-5. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
-
-All LLM descriptions and embeddings are cached on disk keyed by the text and embedding model names, so a second call with the same models reuses prior work.
-
-## What this service provides
+# What this service provides
 
 A Modal app named `cyteonto-api` that exposes three HTTP endpoints:
 
@@ -143,7 +131,7 @@ uv run modal run -m modal_app --env cytetrainer setup
 uv run modal run -m modal_app --env cytetrainer setup --force
 ```
 
-`setup` downloads the CL CSV, the OWL file, and the precomputed Kimi-K2.5 descriptions and qwen3-embedding-8b embeddings into the `cyteonto` Modal volume. It is idempotent; `--force` overwrites existing files.
+`setup` downloads the CL CSV, the OWL file, and the precomputed Kimi-K2.6 descriptions and qwen3-embedding-8b embeddings into the `cyteonto` Modal volume. It is idempotent; `--force` overwrites existing files.
 
 ## Custom domain
 
@@ -194,10 +182,10 @@ Request body:
 |-------|------|----------|---------|-------|
 | `authorLabels` | `list[str]` | yes | | Reference labels, one per item. |
 | `algorithms` | `dict[str, list[str]]` | yes | | Map of algorithm name to that algorithm's labels. Each list must have the same length as `authorLabels`. Algorithm names must be unique. |
-| `llmProvider` | `openrouter \| together \| openai` | no | `together` | OpenAI-compatible provider used for description generation. |
-| `llmModel` | `str` | no | `moonshotai/Kimi-K2.5` | Model name for the selected provider. |
+| `llmProvider` | `openrouter \| together \| openai \| nebius \| fireworks` | no | `nebius` | OpenAI-compatible provider used for description generation. |
+| `llmModel` | `str` | no | `moonshotai/Kimi-K2.6` | Model name for the selected provider. |
 | `llmApiKey` | `str \| null` | no | `null` | If omitted, the hosted `TOGETHER_API_KEY` secret is used when `llmProvider="together"`. Required for any other provider. |
-| `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together` | no | `openrouter` | Embedding backend. |
+| `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together \| nebius` | no | `nebius` | Embedding backend. |
 | `embeddingModel` | `str` | no | `qwen/qwen3-embedding-8b` | Embedding model name. |
 | `embeddingApiKey` | `str \| null` | no | `null` | If omitted, the hosted `OPENROUTER_API_KEY` secret is used when `embeddingProvider="openrouter"`. Required for any other provider except `ollama`. |
 | `embeddingModelSettings` | `dict \| null` | no | `null` | Merged into the embedding request body when `embeddingProvider=openrouter`. Pass `{}` to disable the default DeepInfra routing; pass your own `{"provider": {...}}` to customise. |
@@ -213,7 +201,7 @@ Request body:
 Response:
 
 ```json
-{ "runId": "run-<uuid4>", "state": "queued" }
+{ "runId": "run-<uuid>", "state": "queued" }
 ```
 
 Validation errors return `400` with a JSON `detail` message (for example mismatched label lengths).
@@ -342,7 +330,7 @@ jq -n \
     authorLabels: ["alveolar macrophage", "regulatory T cell"],
     algorithms: { algo1: ["lung macrophage", "Treg"] },
     llmProvider: "together",
-    llmModel: "moonshotai/Kimi-K2.5",
+    llmModel: "moonshotai/Kimi-K2.6",
     llmApiKey: $llm_key,
     embeddingProvider: "openrouter",
     embeddingModel: "qwen/qwen3-embedding-8b",
@@ -431,7 +419,7 @@ Mounted at `/cyteonto_data` inside every container:
 │   └── cl.owl
 ├── embedding/
 │   ├── cell_ontology/
-│   │   └── embeddings_<text>_<embd>.npz
+│   │   └── embeddings_<llmKey>_<embdKey>.npz
 │   └── descriptions/
 │       └── descriptions_<text>.json
 └── user_files/
@@ -440,14 +428,14 @@ Mounted at `/cyteonto_data` inside every container:
         ├── result.csv
         ├── result.json
         ├── embeddings/
-        │   ├── author/author_embeddings_<text>_<embd>.npz
-        │   └── algorithm/<algo_name>_embeddings_<text>_<embd>.npz
+        │   ├── author/author_embeddings_<llmKey>_<embdKey>.npz
+        │   └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
         └── descriptions/
             ├── author/author_descriptions_<text>.json
             └── algorithm/<algo_name>_descriptions_<text>.json
 ```
 
-`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.5`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.
+`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.
 
 You can inspect the volume directly:
 
@@ -466,7 +454,7 @@ All tunables live on `AppConfig` in `modal_app/config.py`:
 | `VOLUME_NAME` | `"cyteonto"` | Modal volume name. |
 | `VOLUME_MOUNT_PATH` | `"/cyteonto_data"` | Mount path inside containers. |
 | `DEFAULT_LLM_PROVIDER` | `"together"` | Default for requests that omit `llmProvider`. |
-| `DEFAULT_LLM_MODEL` | `"moonshotai/Kimi-K2.5"` | Default for requests that omit `llmModel`. |
+| `DEFAULT_LLM_MODEL` | `"moonshotai/Kimi-K2.6"` | Default for requests that omit `llmModel`. |
 | `DEFAULT_EMBEDDING_PROVIDER` | `"openrouter"` | Default for requests that omit `embeddingProvider`. |
 | `DEFAULT_EMBEDDING_MODEL` | `"qwen/qwen3-embedding-8b"` | Default for requests that omit `embeddingModel`. |
 | `SECRET_NAME` | `"cyteonto-secrets"` | Modal secret attached to the worker. Must expose `TOGETHER_API_KEY` and `OPENROUTER_API_KEY`. |

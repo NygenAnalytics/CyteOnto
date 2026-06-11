@@ -1,127 +1,128 @@
 # Workflow
 
-## Main Workflow
+CyteOnto compares parallel lists of cell type labels (author reference vs one or more algorithm predictions) by mapping each label into the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html) and scoring pairs with an ontology-aware metric. The implementation lives in the `cyteonto` package; see [cyteonto/README.md](../cyteonto/README.md) for the full API reference.
 
-The CyteOnto workflow consists of several interconnected processes that work together to provide accurate cell type annotation comparisons.
+## End-to-end flow
 
-## Detailed Process Flow
+1. **Setup (once per model pair)** — `await CyteOnto.from_config(agent, embedding, llm)` ensures CL term descriptions and ontology embeddings exist on disk.
+2. **Compare (per analysis)** — `await cyto.compare(author_labels, algorithms={...}, run_id=...)` describes and embeds user labels, matches them to CL terms, and scores each author/algorithm pair.
+3. **Persist and reuse** — Descriptions (JSON) and embeddings (NPZ) are written under `user_files/` keyed by `run_id`, so reruns with the same labels skip redundant LLM and embedding calls.
 
-### 1. Initial Setup Process
+## Setup: `from_config`
 
-The setup process runs once to prepare the Cell Ontology knowledge base:
+Runs once when you construct a ready-to-use instance:
 
-1. **Load Cell Ontology**: Parse the CSV file containing Cell Ontology terms
-2. **Generate Descriptions**: Use LLM to create textual descriptions for each ontology term. The LLM generates a descriptive name, function of cell, marker genes, disease relevance and developmental stage text.
-3. **Create Embeddings**: Generate semantic embeddings for all ontology descriptions
-4. **Cache Results**: Store descriptions and embeddings for future use
+1. Verify `cell_ontology/cell_to_cell_ontology.csv` and `cell_ontology/cl.owl` exist under `data_dir`.
+2. Load or generate LLM descriptions for every CL term (per text model).
+3. Embed those descriptions and save an ontology NPZ (per text + embedding model pair).
 
-### 2. User Data Processing
+If both artifacts already exist and every CL id has a non-blank description, setup returns immediately. Use `force_regenerate=True` to delete and rebuild the ontology cache.
 
-For each comparison request:
+## Compare: `compare`
 
-1. **Input Processing**: Accept author labels and algorithm predictions
-2. **Description Generation**: Generate descriptions for user labels using LLM
-3. **Embedding Creation**: Generate embedding vectors for user labels
-4. **Ontology Matching**: Find best matching Cell Ontology terms
-5. **Similarity Calculation**: Compute hierarchical similarity using ontology structure
-6. **Results Compilation**: Format results into structured output
+For each call:
 
-### 3. Study Organization
+1. **Resolve `run_id`** — Use the value you pass, or an auto-generated `run-<uuid4>` (logged at INFO and stored in every result row).
+2. **Author labels** — Load cached descriptions/embeddings when possible; generate missing ones via LLM; embed; save under `user_files/.../<run_id>/author/`.
+3. **Match to CL** — Cosine similarity between user embeddings and the precomputed ontology embedding matrix; matches below `min_match_similarity` (default `0.1`) are treated as unmatched (`None`).
+4. **Per algorithm** — Repeat describe/embed/cache/match for each algorithm label list (same length as `author_labels`).
+5. **Pair scoring** — When both sides have a CL id, `OntologySimilarity.similarity(..., metric=...)` produces `cytescore_similarity` (default metric: `cosine_kernel`). When either side is unmatched, the score is `0.0`.
+6. **Results** — A `pandas.DataFrame` with one row per `(algorithm, pair_index)`.
 
-Data is organized by study to enable:
-- Clean separation between different datasets
-- Reproducible analyses
-- Caching and retrieval
+Pass `use_cache=False` to skip on-disk lookups and regenerate everything for that call.
 
-### 4. Similarity Calculation
+### Result columns
 
-Compute final similarity between author and algorithm labels
+| Column | Meaning |
+|--------|---------|
+| `run_id` | Namespace used for caches and result tagging |
+| `algorithm` | Key from the `algorithms` mapping |
+| `pair_index` | Index into the parallel label lists (0-based) |
+| `author_label`, `algorithm_label` | Raw input strings |
+| `author_ontology_id`, `algorithm_ontology_id` | Best CL match, or `None` if below threshold |
+| `author_embedding_similarity`, `algorithm_embedding_similarity` | Cosine similarity to the matched CL embedding |
+| `cytescore_similarity` | Score from the chosen metric when both ids exist; else `0.0` |
+| `similarity_method` | How the row was classified (see below) |
 
-**Methods Used**:
+### `similarity_method` values
 
-1. **Ontology Hierarchy Similarity** (Primary):
-   - Both labels map to valid Cell Ontology terms
-   - Use ontology graph structure to compute semantic distance
-   - Consider parent-child relationships, common ancestors
-   - Normalized score between 0 and 1
+| Value | When |
+|-------|------|
+| `cytescore` | Both labels matched valid `CL:` ids; hierarchy/embedding metric applied |
+| `partial_match` | Exactly one side matched the ontology |
+| `no_matches` | Neither side matched |
+| `string_similarity` | Both ids present but not standard `CL:` prefixes (rare) |
 
-2. **String Similarity** (Fallback):
-   - Used when one or both labels lack ontology matches
-   - Employs Python's `SequenceMatcher` for text comparison
-   - Provides basic similarity measure
+## Run organization
 
-3. **Partial Match**:
-   - Only one label has ontology match
-   - Limited similarity information available
+Comparisons are grouped by **`run_id`**, not by a separate “study” concept:
 
-4. **No Matches**:
-   - Neither label matches ontology terms
-   - No meaningful similarity can be computed
+- Reuse the same `run_id` when you rerun with the same labels to hit the cache.
+- Use a new `run_id` for a distinct analysis so caches stay isolated.
+- Delete artifacts with `cyto.clear_run(run_id)` (optionally scoped to author or a single algorithm).
 
-## Workflow Diagram (Overview)
+Identifiers are normalized for paths (`/`, `:`, spaces, `.` replaced) — see [FILE_MANAGEMENT.md](FILE_MANAGEMENT.md).
 
-```mermaid
-flowchart TD
-    A["📊 Input: Cell Labels"] --> B["🤖 LLM Description Generation"]
-    B --> C["📐 Embedding Generation"]
-    C --> D["🎯 Ontology Matching"]
-    D --> E["🧮 Similarity Calculation"]
-    E --> F["📈 Results & Analysis"]
-    
-    B --> B1["💾 Cache Descriptions<br/>(JSON)"]
-    C --> C1["💾 Cache Embeddings<br/>(NPZ)"]
-    D --> D1["🔗 Cell Ontology<br/>(OWL)"]
-    
-    G["⚙️ Setup Process"] --> H["📚 Load Cell Ontology"]
-    H --> I["🤖 Generate Descriptions<br/>for All CL Terms"]
-    I --> J["📐 Create Embeddings<br/>for All CL Terms"] 
-    J --> K["💾 Save Base Cache"]
-    
-    L["🏥 Study Organization"] --> M["📁 study1/"]
-    L --> N["📁 study2/"]
-    L --> O["📁 study3/"]
-    M --> M1["📂 author/"]
-    M --> M2["📂 algorithms/"]
-    N --> N1["📂 author/"]
-    N --> N2["📂 algorithms/"]
-    
-    style A fill:#e1f5fe
-    style F fill:#e8f5e8
-    style G fill:#fff3e0
-    style L fill:#f3e5f5
-```
+## Similarity metrics
 
-## Workflow Diagram (Label Comparision)
+The default `metric="cosine_kernel"` applies a Gaussian hill on raw embedding cosine between the two matched CL term vectors. Other options include `cosine_direct`, OWL hierarchy metrics (`path`, `set:jaccard`, ...), and `simple` (string fallback on CL id strings). See the metrics table in [cyteonto/README.md](../cyteonto/README.md#similarity-metrics).
+
+Pair-level `cytescore_similarity` is only computed when **both** author and algorithm labels map to CL ids above the match threshold.
+
+## Workflow diagram (overview)
 
 ```mermaid
 flowchart TD
-    A["Input: Two Cell Type Labels"] --> B["Generate Descriptions"]
-    B --> C["Create Embeddings"]  
-    C --> D["Match to Cell Ontology"]
-    
-    D --> E{"Both labels<br/>match CL terms?"}
-    E -->|Yes| F["Calculate Ontology<br/>Hierarchy Similarity"]
-    E -->|No| G{"One label<br/>matches CL?"}
-    
-    G -->|Yes| H["Partial Match<br/>Limited similarity"]
-    G -->|No| I{"Use string<br/>similarity?"}
-    
-    I -->|Yes| J["String Similarity<br/>(SequenceMatcher)"]
-    I -->|No| K["No Match<br/>Cannot compute similarity"]
-    
-    F --> L["Primary Result<br/>High confidence"]
-    H --> M["Secondary Result<br/>Medium confidence"] 
-    J --> N["Fallback Result<br/>Low confidence"]
-    K --> O["No Result<br/>No similarity"]
-    
-    L --> P["Final Results DataFrame"]
-    M --> P
-    N --> P  
-    O --> P
-    
-    style A fill:#e1f5fe
-    style F fill:#e8f5e8
-    style J fill:#fff3e0
-    style K fill:#ffebee
-    style P fill:#f3e5f5
+    subgraph setup ["Setup (from_config)"]
+        H["Load CL CSV + OWL"]
+        I["LLM descriptions for CL terms"]
+        J["Embed CL descriptions"]
+        K["Save ontology JSON + NPZ"]
+        H --> I --> J --> K
+    end
+
+    subgraph compare ["Compare (per run_id)"]
+        A["Input: author + algorithm labels"]
+        B["LLM descriptions for user labels"]
+        C["Embed description text"]
+        D["Match to CL via cosine similarity"]
+        E["OntologySimilarity metric per pair"]
+        F["Results DataFrame"]
+        A --> B --> C --> D --> E --> F
+    end
+
+    setup --> compare
+    B --> B1["Cache descriptions JSON"]
+    C --> C1["Cache embeddings NPZ"]
+    D --> D1["Ontology embedding matrix"]
 ```
+
+## Workflow diagram (single label pair)
+
+```mermaid
+flowchart TD
+    A["Author label + algorithm label"] --> B["Describe + embed each label"]
+    B --> C["Match each embedding to nearest CL term"]
+
+    C --> D{"Both above min_match_similarity?"}
+    D -->|Yes| E["metric e.g. cosine_kernel on CL ids"]
+    D -->|No| F["cytescore_similarity = 0.0"]
+
+    E --> G["similarity_method: cytescore"]
+    F --> H{"Which side matched?"}
+    H -->|Neither| I["no_matches"]
+    H -->|One| J["partial_match"]
+
+    G --> K["Result row"]
+    I --> K
+    J --> K
+```
+
+## AnnData entry point
+
+`compare_anndata` reads algorithm columns from `adata.obs` and delegates to `compare` with the same `run_id` and caching semantics. Author labels are still passed explicitly as a list.
+
+## Related documentation
+
+- [FILE_MANAGEMENT.md](FILE_MANAGEMENT.md) — Directory layout, naming, and cache utilities
+- [cyteonto/README.md](../cyteonto/README.md) — Configuration, metrics, storage formats, and extension points

@@ -1,13 +1,15 @@
 from pathlib import Path
 
+from .models import ModelArtifactKey
 
-def _clean_model(name: str) -> str:
-    """Normalise a model name for safe filenames. Preserves case and dots."""
-    return name.replace("/", "-").replace(":", "-").replace(" ", "_")
+
+def artifact_key_segment(key: ModelArtifactKey) -> str:
+    """Filename-safe segment ``{provider}_{company}-{modelName}``."""
+    return key.filename_segment()
 
 
 def _clean_identifier(name: str) -> str:
-    """Normalise a free-form identifier (study name, algo name, label set name)."""
+    """Normalise a free-form identifier (run id, algo name)."""
     return name.replace("/", "-").replace(":", "-").replace(" ", "_").replace(".", "_")
 
 
@@ -18,13 +20,13 @@ class PathConfig:
 
         cell_ontology/cell_to_cell_ontology.csv
         cell_ontology/cl.owl
-        embedding/cell_ontology/embeddings_<text>_<embd>.npz
-        embedding/descriptions/descriptions_<text>.json
+        embedding/cell_ontology/embeddings_<llmKey>_<embdKey>.npz
+        embedding/descriptions/descriptions_<llmKey>.json
 
     And under ``user_dir`` (defaults to ``data_dir/user_files``)::
 
-        embeddings/<run_id>/<kind>/<identifier>_embeddings_<text>_<embd>.npz
-        descriptions/<run_id>/<kind>/<identifier>_descriptions_<text>.json
+        embeddings/<run_id>/<kind>/<identifier>_embeddings_<llmKey>_<embdKey>.npz
+        descriptions/<run_id>/<kind>/<identifier>_descriptions_<llmKey>.json
     """
 
     def __init__(
@@ -45,14 +47,19 @@ class PathConfig:
     def ontology_owl(self) -> Path:
         return self.data_dir / "cell_ontology" / "cl.owl"
 
-    def ontology_embeddings(self, text_model: str, embd_model: str) -> Path:
-        name = f"embeddings_{_clean_model(text_model)}_{_clean_model(embd_model)}.npz"
+    def ontology_embeddings(
+        self, llm_key: ModelArtifactKey, embd_key: ModelArtifactKey
+    ) -> Path:
+        name = (
+            f"embeddings_{artifact_key_segment(llm_key)}_"
+            f"{artifact_key_segment(embd_key)}.npz"
+        )
         path = self.data_dir / "embedding" / "cell_ontology" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def ontology_descriptions(self, text_model: str) -> Path:
-        name = f"descriptions_{_clean_model(text_model)}.json"
+    def ontology_descriptions(self, llm_key: ModelArtifactKey) -> Path:
+        name = f"descriptions_{artifact_key_segment(llm_key)}.json"
         path = self.data_dir / "embedding" / "descriptions" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
@@ -62,10 +69,13 @@ class PathConfig:
         run_id: str,
         kind: str,
         identifier: str,
-        text_model: str,
-        embd_model: str,
+        llm_key: ModelArtifactKey,
+        embd_key: ModelArtifactKey,
     ) -> Path:
-        name = f"{_clean_identifier(identifier)}_embeddings_{_clean_model(text_model)}_{_clean_model(embd_model)}.npz"
+        name = (
+            f"{_clean_identifier(identifier)}_embeddings_"
+            f"{artifact_key_segment(llm_key)}_{artifact_key_segment(embd_key)}.npz"
+        )
         path = self.user_dir / "embeddings" / _clean_identifier(run_id) / kind / name
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
@@ -75,9 +85,12 @@ class PathConfig:
         run_id: str,
         kind: str,
         identifier: str,
-        text_model: str,
+        llm_key: ModelArtifactKey,
     ) -> Path:
-        name = f"{_clean_identifier(identifier)}_descriptions_{_clean_model(text_model)}.json"
+        name = (
+            f"{_clean_identifier(identifier)}_descriptions_"
+            f"{artifact_key_segment(llm_key)}.json"
+        )
         path = self.user_dir / "descriptions" / _clean_identifier(run_id) / kind / name
         path.parent.mkdir(parents=True, exist_ok=True)
         return path

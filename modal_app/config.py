@@ -27,15 +27,15 @@ class AppConfig:
     REMOTE_CELL_ONTOLOGY_DIR: str = f"{VOLUME_MOUNT_PATH}/cell_ontology"
     REMOTE_EMBEDDING_DIR: str = f"{VOLUME_MOUNT_PATH}/embedding"
 
-    DEFAULT_LLM_PROVIDER: str = "together"
-    DEFAULT_LLM_MODEL: str = "moonshotai/Kimi-K2.5"
-    DEFAULT_EMBEDDING_PROVIDER: str = "openrouter"
-    DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
+    DEFAULT_LLM_PROVIDER: str = "nebius"
+    DEFAULT_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
+    DEFAULT_EMBEDDING_PROVIDER: str = "nebius"
+    DEFAULT_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
 
-    LLM_SECRET_PROVIDER: str = "together"
-    LLM_SECRET_ENV_VAR: str = "TOGETHER_API_KEY"
-    EMBEDDING_SECRET_PROVIDER: str = "openrouter"
-    EMBEDDING_SECRET_ENV_VAR: str = "OPENROUTER_API_KEY"
+    LLM_SECRET_PROVIDER: str = "nebius"
+    LLM_SECRET_ENV_VAR: str = "NEBIUS_API_KEY"
+    EMBEDDING_SECRET_PROVIDER: str = "nebius"
+    EMBEDDING_SECRET_ENV_VAR: str = "NEBIUS_API_KEY"
 
     WORKER_CPU: float = 1.0
     WORKER_MEMORY_MB: int = 2048
@@ -83,7 +83,19 @@ def build_cyteonto_image() -> modal.Image:
             str(app_config.CYTEONTO_DIR),
             "/root/cyteonto",
             copy=True,
-            ignore=["*.ipynb", "*.npz", "*.json"]
+            ignore=[
+                "*.ipynb",
+                "*.npz",
+                "*.json",
+                ".venv/",
+                ".pytest_cache/",
+                ".mypy_cache/",
+                ".ruff_cache/",
+                "__pycache__/",
+                "notebooks/",
+                "tmp/",
+                "tests/",
+            ],
         )
         .add_local_file(
             str(app_config.PYPROJECT_PATH),

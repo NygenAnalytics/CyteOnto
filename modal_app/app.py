@@ -1,13 +1,7 @@
 """Modal entry point for the CyteOnto API.
 
-Deploy:
-    modal deploy modal_app/app.py  --env cytetrainer
-
-Prime the volume once after deploy:
-    modal run modal_app/app.py::setup  --env cytetrainer
-
-Force-refresh the precomputed assets:
-    modal run modal_app/app.py::setup --force  --env cytetrainer
+Deploy (Nygen only):
+    modal deploy -m modal_app  --env cytetrainer
 """
 
 import sys

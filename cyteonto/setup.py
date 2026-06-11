@@ -1,8 +1,8 @@
-"""Download shipped and precomputed assets into the cyteonto_new data tree.
+"""Download shipped and precomputed assets into the cyteonto data tree.
 
 Run:
-    uv run python cyteonto_new/setup.py
-    uv run python cyteonto_new/setup.py --force
+    uv run python cyteonto/setup.py
+    uv run python cyteonto/setup.py --force
 """
 
 import argparse
@@ -12,25 +12,71 @@ from pathlib import Path
 import requests
 from tqdm.auto import tqdm  # type: ignore
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from .config import Config  # noqa: E402
+from .logger import logger  # noqa: E402
+from .models import EmbdConfig, LlmConfig, ModelArtifactKey  # noqa: E402
+from .paths import PathConfig, artifact_key_segment  # noqa: E402
 
-from cyteonto_new.logger import logger  # noqa: E402
-from cyteonto_new.paths import PathConfig  # noqa: E402
-
+# Nygen public R2 bucket for CyteOnto v2
 BASE_URL = "https://pub-d8bf3af01ebe421abded39c4cb33d88a.r2.dev/cyteonto_v2"
 
-DEFAULT_TEXT_MODEL: str = "moonshotai/Kimi-K2.5"
-DEFAULT_EMBEDDING_MODEL: str = "qwen/qwen3-embedding-8b"
+_cfg = Config()
 
-# Paste the public Cloudflare URLs below. Each value must point to the raw file.
+PRIMARY_LLM = LlmConfig(
+    provider=_cfg.PRIMARY_LLM_PROVIDER, model=_cfg.PRIMARY_LLM_MODEL
+)
+PRIMARY_EMBEDDING = EmbdConfig(
+    provider=_cfg.PRIMARY_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
+    model=_cfg.PRIMARY_EMBEDDING_MODEL,
+    modelSettings={},
+)
+
+BACKUP_LLM = LlmConfig(
+    provider=_cfg.FALLBACK_LLM_PROVIDER, model=_cfg.FALLBACK_LLM_MODEL
+)
+BACKUP_EMBEDDING = EmbdConfig(
+    provider=_cfg.FALLBACK_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
+    model=_cfg.FALLBACK_EMBEDDING_MODEL,
+)
+
+PRIMARY_LLM_KEY = PRIMARY_LLM.to_artifact_key()
+PRIMARY_EMBD_KEY = PRIMARY_EMBEDDING.to_artifact_key()
+BACKUP_LLM_KEY = BACKUP_LLM.to_artifact_key()
+BACKUP_EMBD_KEY = BACKUP_EMBEDDING.to_artifact_key()
+
 ONTOLOGY_CSV_URL: str = f"{BASE_URL}/cell_ontology/cell_to_cell_ontology.csv"
 ONTOLOGY_OWL_URL: str = f"{BASE_URL}/cell_ontology/cl.owl"
-ONTOLOGY_DESCRIPTIONS_URL: str = (
-    f"{BASE_URL}/descriptions/descriptions_moonshotai-Kimi-K2.5.json"
-)
-ONTOLOGY_EMBEDDINGS_URL: str = (
-    f"{BASE_URL}/embeddings/embeddings_moonshotai-Kimi-K2.5_qwen-qwen3-embedding-8b.npz"
-)
+
+
+def _descriptions_url(llm_key: ModelArtifactKey) -> str:
+    return f"{BASE_URL}/descriptions/descriptions_{artifact_key_segment(llm_key)}.json"
+
+
+def _embeddings_url(llm_key: ModelArtifactKey, embd_key: ModelArtifactKey) -> str:
+    return (
+        f"{BASE_URL}/embeddings/embeddings_{artifact_key_segment(llm_key)}_"
+        f"{artifact_key_segment(embd_key)}.npz"
+    )
+
+
+def _ontology_artifact_targets(paths: PathConfig) -> list[tuple[str, Path]]:
+    """Primary and backup description + embedding files on the CDN."""
+    pairs: list[tuple[ModelArtifactKey, ModelArtifactKey]] = [
+        (PRIMARY_LLM_KEY, PRIMARY_EMBD_KEY),
+        (BACKUP_LLM_KEY, BACKUP_EMBD_KEY),
+    ]
+    targets: list[tuple[str, Path]] = []
+    for llm_key, embd_key in pairs:
+        targets.append(
+            (_descriptions_url(llm_key), paths.ontology_descriptions(llm_key))
+        )
+        targets.append(
+            (
+                _embeddings_url(llm_key, embd_key),
+                paths.ontology_embeddings(llm_key, embd_key),
+            )
+        )
+    return targets
 
 
 def _download(url: str, destination: Path, *, force: bool) -> bool:
@@ -78,7 +124,7 @@ def main() -> int:
     parser.add_argument(
         "--data-dir",
         default=None,
-        help="Root data directory (defaults to cyteonto_new/data).",
+        help="Root data directory (defaults to cyteonto/data).",
     )
     args = parser.parse_args()
 
@@ -87,14 +133,7 @@ def main() -> int:
     targets = [
         (ONTOLOGY_CSV_URL, paths.ontology_csv),
         (ONTOLOGY_OWL_URL, paths.ontology_owl),
-        (
-            ONTOLOGY_DESCRIPTIONS_URL,
-            paths.ontology_descriptions(DEFAULT_TEXT_MODEL),
-        ),
-        (
-            ONTOLOGY_EMBEDDINGS_URL,
-            paths.ontology_embeddings(DEFAULT_TEXT_MODEL, DEFAULT_EMBEDDING_MODEL),
-        ),
+        *_ontology_artifact_targets(paths),
     ]
 
     failures: list[str] = []

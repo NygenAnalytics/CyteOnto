@@ -195,13 +195,27 @@ def _build_descriptor_agent(
     """
     model_settings: dict[str, Any] = {}
     if not reasoning:
-        model_settings = {
-            "thinking": False,
-            "extra_body": {
-                "chat_template_kwargs": {"thinking": False},  # for together-ai
-                "reasoning": {"enabled": False},  # for openrouter
-            },
-        }
+        provider = getattr(base_agent.model, "provider", None)
+        base_url = getattr(provider, "base_url", None) if provider is not None else None
+        is_fireworks = (
+            isinstance(base_url, str)
+            and base_url.rstrip("/") == "https://api.fireworks.ai/inference/v1"
+        )
+        if is_fireworks:
+            model_settings = {
+                "extra_body": {
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": None,
+                },
+            }
+        else:
+            model_settings = {
+                "thinking": False,
+                "extra_body": {
+                    "chat_template_kwargs": {"thinking": False},  # for together-ai
+                    "reasoning": {"enabled": False},  # for openrouter
+                },
+            }
 
     agent: Agent = Agent(
         base_agent.model,

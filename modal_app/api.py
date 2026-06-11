@@ -9,10 +9,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
+from cyteonto.config import Config as CyteConfig
+
 from .config import AppConfig
 from .models import CompareRequest, CompareResponse, StatusResponse
 
 app_config = AppConfig()
+cyte_config = CyteConfig()
 
 
 def _utc_now() -> str:
@@ -63,28 +66,30 @@ def create_app(volume, run_compare_fn) -> FastAPI:
                     f"expected {len(req.authorLabels)}",
                 )
 
-        if req.llmApiKey is None and req.llmProvider != app_config.LLM_SECRET_PROVIDER:
+        if (
+            req.llmApiKey is None
+            and req.llmProvider not in cyte_config.PROVIDER_API_KEY_ENV
+        ):
             raise HTTPException(
                 400,
                 (
                     f"llmApiKey is required when llmProvider='{req.llmProvider}'. "
-                    f"Omit llmApiKey only when llmProvider='{app_config.LLM_SECRET_PROVIDER}' "
-                    f"so the hosted '{app_config.LLM_SECRET_ENV_VAR}' secret can be used."
+                    f"Omit llmApiKey only for hosted providers: "
+                    f"{sorted(cyte_config.PROVIDER_API_KEY_ENV)}."
                 ),
             )
         if (
             req.embeddingApiKey is None
-            and req.embeddingProvider != app_config.EMBEDDING_SECRET_PROVIDER
             and req.embeddingProvider != "ollama"
+            and req.embeddingProvider not in cyte_config.PROVIDER_API_KEY_ENV
         ):
             raise HTTPException(
                 400,
                 (
                     f"embeddingApiKey is required when "
                     f"embeddingProvider='{req.embeddingProvider}'. "
-                    f"Omit embeddingApiKey only when "
-                    f"embeddingProvider='{app_config.EMBEDDING_SECRET_PROVIDER}' "
-                    f"so the hosted '{app_config.EMBEDDING_SECRET_ENV_VAR}' secret can be used."
+                    f"Omit embeddingApiKey only for hosted providers: "
+                    f"{sorted(cyte_config.PROVIDER_API_KEY_ENV)} (or ollama)."
                 ),
             )
 

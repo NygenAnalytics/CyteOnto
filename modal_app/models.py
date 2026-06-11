@@ -8,10 +8,20 @@ from .config import AppConfig
 
 app_config = AppConfig()
 
-LlmProvider: TypeAlias = Literal["openrouter", "together", "openai"]
-EmbdProvider: TypeAlias = Literal[
-    "deepinfra", "ollama", "openai", "google", "openrouter", "together"
+LlmProvider: TypeAlias = Literal[
+    "openrouter", "together", "openai", "nebius", "fireworks"
 ]
+EmbdProvider: TypeAlias = Literal[
+    "deepinfra",
+    "fireworks",
+    "nebius",
+    "ollama",
+    "openai",
+    "google",
+    "openrouter",
+    "together",
+]
+ModelPairTier: TypeAlias = Literal["primary", "fallback", "mixed"]
 RunState: TypeAlias = Literal["queued", "running", "completed", "failed"]
 
 
@@ -46,6 +56,15 @@ class CompareResponse(BaseModel):
     state: RunState
 
 
+class ModelPairUsageResponse(BaseModel):
+    llmTier: ModelPairTier
+    embeddingTier: ModelPairTier
+    llmProvider: str
+    llmModel: str
+    embeddingProvider: str
+    embeddingModel: str
+
+
 class StatusResponse(BaseModel):
     runId: str
     state: RunState
@@ -58,3 +77,4 @@ class StatusResponse(BaseModel):
     numRows: int | None = None
     resultCsvPath: str | None = None
     resultJsonPath: str | None = None
+    modelPairUsage: ModelPairUsageResponse | None = None

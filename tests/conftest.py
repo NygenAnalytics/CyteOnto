@@ -1,14 +1,13 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
-import numpy as np
 import pandas as pd  # type: ignore
 import pytest
 from pydantic_ai import Agent
 
-from cyteonto.model import CellDescription
+from cyteonto.models import CellDescription
 
 
 @pytest.fixture
@@ -25,7 +24,6 @@ def sample_cell_description():
         initialLabel="T cell",
         descriptiveName="CD4+ helper T lymphocyte",
         function="Coordinates immune responses by secreting cytokines",
-        markerGenes=["CD4", "CD3", "TCR"],
         diseaseRelevance="Critical in autoimmune diseases",
         developmentalStage="Mature adaptive immune cell",
     )
@@ -50,76 +48,12 @@ def sample_ontology_csv_file(temp_dir, sample_ontology_mapping_df):
 
 
 @pytest.fixture
-def sample_embeddings():
-    """Create sample embeddings for testing."""
-    return np.random.rand(5, 768).astype(np.float32)
-
-
-@pytest.fixture
-def sample_ontology_ids():
-    """Create sample ontology IDs for testing."""
-    return ["CL:0000001", "CL:0000002", "CL:0000003", "CL:0000004", "CL:0000005"]
-
-
-@pytest.fixture
 def mock_base_agent():
     """Create a mock base agent for testing."""
     agent = Mock(spec=Agent)
     agent.model = Mock()
     agent.model.model_name = "test-model"
     return agent
-
-
-@pytest.fixture
-def mock_async_base_agent():
-    """Create a mock async base agent for testing."""
-    agent = AsyncMock(spec=Agent)
-    agent.model = Mock()
-    agent.model.model_name = "test-model"
-    return agent
-
-
-@pytest.fixture
-def sample_embd_model_config():
-    """Create a sample embedding model configuration for testing."""
-    from cyteonto.llm_config import EMBDModelConfig
-
-    return EMBDModelConfig(
-        provider="deepinfra",
-        model="test-embedding-model",
-        apiKey="test-api-key",
-        maxConcEmbed=5,
-    )
-
-
-@pytest.fixture
-def sample_user_labels():
-    """Create sample user labels for testing."""
-    return [
-        "T helper cell",
-        "B memory cell",
-        "Natural killer cell",
-        "Monocyte",
-        "Macrophage",
-    ]
-
-
-@pytest.fixture
-def sample_descriptions():
-    """Create sample descriptions for testing."""
-    descriptions = {}
-    for i, label in enumerate(
-        ["T cell", "B cell", "NK cell", "Monocyte", "Macrophage"]
-    ):
-        descriptions[f"CL:000000{i + 1}"] = CellDescription(
-            initialLabel=label,
-            descriptiveName=f"Descriptive {label}",
-            function=f"Function of {label}",
-            markerGenes=[f"MARKER{i + 1}A", f"MARKER{i + 1}B"],
-            diseaseRelevance=f"Disease relevance for {label}",
-            developmentalStage=f"Developmental stage for {label}",
-        )
-    return descriptions
 
 
 @pytest.fixture
@@ -134,7 +68,6 @@ def mock_env_vars():
 
     yield env_vars
 
-    # Cleanup
     for key in env_vars.keys():
         os.environ.pop(key, None)
 
@@ -157,10 +90,3 @@ def mock_pubmed_response():
             </PubmedArticle>
         </PubmedArticleSet>""",
     }
-
-
-@pytest.fixture(autouse=True)
-def reset_singletons():
-    """Reset any singleton instances between tests."""
-    # Add any singleton cleanup here if needed
-    yield

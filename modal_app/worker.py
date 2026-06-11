@@ -9,47 +9,47 @@ from typing import Any
 
 from pydantic_ai import Agent
 
+from cyteonto.config import Config as CyteConfig
+
 from .config import AppConfig
 
 app_config = AppConfig()
+cyte_config = CyteConfig()
+
+
+def _env_api_key(provider: str) -> str:
+    env_var = cyte_config.PROVIDER_API_KEY_ENV.get(provider)
+    if not env_var:
+        return ""
+    return os.environ.get(env_var, "")
 
 
 def _resolve_api_keys(payload: dict[str, Any]) -> dict[str, Any]:
-    """Fill missing LLM/embedding keys from the attached secret when the provider matches."""
+    """Fill missing LLM/embedding keys from environment for known providers."""
     resolved = dict(payload)
 
     if not resolved.get("llmApiKey"):
-        if resolved.get("llmProvider") == app_config.LLM_SECRET_PROVIDER:
-            secret_key = os.environ.get(app_config.LLM_SECRET_ENV_VAR)
-            if not secret_key:
-                raise RuntimeError(
-                    f"{app_config.LLM_SECRET_ENV_VAR} is not set on the worker. "
-                    f"Attach the '{app_config.SECRET_NAME}' Modal secret or "
-                    f"pass llmApiKey in the request."
-                )
-            resolved["llmApiKey"] = secret_key
-        else:
+        key = _env_api_key(resolved.get("llmProvider", ""))
+        if not key:
             raise RuntimeError(
-                f"llmApiKey missing and llmProvider='{resolved.get('llmProvider')}' "
-                f"is not covered by the hosted secret."
+                f"llmApiKey missing and no env var for llmProvider="
+                f"'{resolved.get('llmProvider')}'"
             )
+        resolved["llmApiKey"] = key
 
     if not resolved.get("embeddingApiKey"):
-        if resolved.get("embeddingProvider") == app_config.EMBEDDING_SECRET_PROVIDER:
-            secret_key = os.environ.get(app_config.EMBEDDING_SECRET_ENV_VAR)
-            if not secret_key:
+        if resolved.get("embeddingProvider") == "ollama":
+            pass
+        else:
+            key = _env_api_key(resolved.get("embeddingProvider", ""))
+            if not key:
+                key = cyte_config.EMBEDDING_API_KEY
+            if not key:
                 raise RuntimeError(
-                    f"{app_config.EMBEDDING_SECRET_ENV_VAR} is not set on the worker. "
-                    f"Attach the '{app_config.SECRET_NAME}' Modal secret or "
-                    f"pass embeddingApiKey in the request."
+                    f"embeddingApiKey missing and no env var for "
+                    f"embeddingProvider='{resolved.get('embeddingProvider')}'"
                 )
-            resolved["embeddingApiKey"] = secret_key
-        elif resolved.get("embeddingProvider") != "ollama":
-            raise RuntimeError(
-                f"embeddingApiKey missing and "
-                f"embeddingProvider='{resolved.get('embeddingProvider')}' "
-                f"is not covered by the hosted secret."
-            )
+            resolved["embeddingApiKey"] = key
 
     return resolved
 
@@ -86,17 +86,14 @@ def _write_status(run_id: str, status: dict[str, Any]) -> None:
 _LLM_BASE_URLS: dict[str, str | None] = {
     "openrouter": "https://openrouter.ai/api/v1/",
     "together": "https://api.together.xyz/v1/",
+    "nebius": "https://api.tokenfactory.nebius.com/v1/",
+    "fireworks": "https://api.fireworks.ai/inference/v1",
     "openai": None,
 }
 
 
 def build_agent(provider: str, model: str, api_key: str) -> Agent:
-    """Build a pydantic-ai Agent for an OpenAI-compatible provider.
-
-    Uses ``OpenAIChatModel`` with a provider-specific ``base_url`` so the same code
-    path works for OpenRouter, Together, and OpenAI without depending on
-    version-specific pydantic-ai submodules.
-    """
+    """Build a pydantic-ai Agent for an OpenAI-compatible provider."""
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -111,11 +108,33 @@ def build_agent(provider: str, model: str, api_key: str) -> Agent:
     return Agent(OpenAIChatModel(model, provider=OpenAIProvider(**provider_kwargs)))
 
 
+def _fallback_configs() -> tuple[Agent, Any, Any]:
+    from cyteonto.models import EmbdConfig, LlmConfig
+
+    fb_llm = LlmConfig(
+        provider=cyte_config.FALLBACK_LLM_PROVIDER,
+        model=cyte_config.FALLBACK_LLM_MODEL,
+    )
+    fb_key = _env_api_key(cyte_config.FALLBACK_LLM_PROVIDER)
+    fb_agent = build_agent(
+        cyte_config.FALLBACK_LLM_PROVIDER,
+        cyte_config.FALLBACK_LLM_MODEL,
+        fb_key,
+    )
+    fb_embedding = EmbdConfig(
+        provider=cyte_config.FALLBACK_EMBEDDING_PROVIDER,  # type: ignore[arg-type]
+        model=cyte_config.FALLBACK_EMBEDDING_MODEL,
+        apiKey=_env_api_key(cyte_config.FALLBACK_EMBEDDING_PROVIDER)
+        or cyte_config.EMBEDDING_API_KEY,
+    )
+    return fb_agent, fb_embedding, fb_llm
+
+
 async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     """Execute one compare request end-to-end and update `status.json` at each stage."""
     from cyteonto import CyteOnto
     from cyteonto.logger import logger
-    from cyteonto.models import EmbdConfig
+    from cyteonto.models import EmbdConfig, LlmConfig
 
     status = _read_status(run_id)
     status.update({"state": "running", "startedAt": _utc_now()})
@@ -123,6 +142,7 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     await volume.commit.aio()
 
     csv_path, json_path = _result_paths(run_id)
+    cyto = None
 
     try:
         payload = _resolve_api_keys(payload)
@@ -137,15 +157,23 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
             modelSettings=payload.get("embeddingModelSettings"),
             maxConcurrent=payload["embeddingMaxConcurrent"],
         )
+        fb_agent, fb_embedding, fb_llm = _fallback_configs()
 
         cyto = await CyteOnto.from_config(
             agent=agent,
             embedding=embedding,
+            llm=LlmConfig(
+                provider=payload["llmProvider"],
+                model=payload["llmModel"],
+            ),
             data_dir=app_config.REMOTE_DATA_DIR,
             user_dir=app_config.REMOTE_USER_DIR,
             max_description_concurrency=payload["maxDescriptionConcurrency"],
             use_pubmed_tool=payload["usePubmedTool"],
             reasoning=payload["reasoning"],
+            fallback_agent=fb_agent,
+            fallback_embedding=fb_embedding,
+            fallback_llm=fb_llm,
         )
 
         df = await cyto.compare(
@@ -172,6 +200,7 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
                     json_path.relative_to(app_config.REMOTE_DATA_DIR)
                 ),
                 "error": None,
+                "modelPairUsage": cyto.model_pair_usage.to_status_dict(),
             }
         )
         logger.info(f"[{run_id}] compare completed ({len(df)} rows)")
@@ -179,13 +208,14 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     except Exception as exc:
         tb = traceback.format_exc()
         logger.error(f"[{run_id}] compare failed: {type(exc).__name__}: {exc}\n{tb}")
-        status.update(
-            {
-                "state": "failed",
-                "completedAt": _utc_now(),
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        )
+        fail_update: dict[str, Any] = {
+            "state": "failed",
+            "completedAt": _utc_now(),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        if cyto is not None:
+            fail_update["modelPairUsage"] = cyto.model_pair_usage.to_status_dict()
+        status.update(fail_update)
 
     finally:
         _write_status(run_id, status)

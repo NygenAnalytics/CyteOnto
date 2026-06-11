@@ -1,13 +1,4 @@
-"""On-disk storage for embeddings (NPZ) and descriptions (JSON).
-
-Two NPZ layouts are supported:
-
-* Ontology layout (legacy-compatible): keys ``embeddings``, ``ontology_ids``, ``metadata``.
-* User layout: keys ``embeddings``, ``labels``, ``metadata``.
-
-Keeping ``labels`` inline with the user NPZ lets us detect when a user re-runs
-``compare`` with a different label set without any sidecar metadata file.
-"""
+"""On-disk storage for embeddings (NPZ) and descriptions (JSON), schema v3."""
 
 import json
 from datetime import datetime, timezone
@@ -17,13 +8,32 @@ from typing import Any
 import numpy as np
 
 from .logger import logger
-from .models import CellDescription
+from .models import (
+    CellDescription,
+    DescriptionFileEnvelope,
+    ModelArtifactKey,
+)
 
 
-def _default_meta(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def _artifact_key_dict(key: ModelArtifactKey) -> dict[str, str]:
+    return {
+        "provider": key.provider,
+        "model": key.model,
+        "company": key.company,
+        "modelName": key.modelName,
+    }
+
+
+def _default_meta(
+    llm_key: ModelArtifactKey,
+    embd_key: ModelArtifactKey,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     meta: dict[str, Any] = {
-        "version": "2.0",
+        "schemaVersion": "3.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "llm": _artifact_key_dict(llm_key),
+        "embedding": _artifact_key_dict(embd_key),
     }
     if extra:
         meta.update(extra)
@@ -34,11 +44,13 @@ def save_ontology_embeddings(
     path: Path,
     embeddings: np.ndarray,
     ontology_ids: list[str],
+    llm_key: ModelArtifactKey,
+    embd_key: ModelArtifactKey,
     extra_metadata: dict[str, Any] | None = None,
 ) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        meta = _default_meta(extra_metadata)
+        meta = _default_meta(llm_key, embd_key, extra_metadata)
         meta.update(
             {
                 "num_embeddings": int(len(embeddings)),
@@ -79,11 +91,13 @@ def save_user_embeddings(
     path: Path,
     embeddings: np.ndarray,
     labels: list[str],
+    llm_key: ModelArtifactKey,
+    embd_key: ModelArtifactKey,
     extra_metadata: dict[str, Any] | None = None,
 ) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        meta = _default_meta(extra_metadata)
+        meta = _default_meta(llm_key, embd_key, extra_metadata)
         meta.update(
             {
                 "num_embeddings": int(len(embeddings)),
@@ -126,10 +140,16 @@ def load_user_embeddings(
 def save_descriptions(
     path: Path,
     descriptions: dict[str, CellDescription],
+    artifact_key: ModelArtifactKey,
 ) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {k: v.model_dump() for k, v in descriptions.items()}
+        envelope = DescriptionFileEnvelope(
+            artifactKey=artifact_key,
+            updatedAt=datetime.now(timezone.utc).isoformat(),
+            descriptions=descriptions,
+        )
+        payload = envelope.model_dump(mode="json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved {len(descriptions)} descriptions to {path}")
@@ -145,9 +165,21 @@ def load_descriptions(path: Path) -> dict[str, CellDescription] | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        descriptions = {k: CellDescription.model_validate(v) for k, v in raw.items()}
-        logger.info(f"Loaded {len(descriptions)} descriptions from {path}")
-        return descriptions
+        if not isinstance(raw, dict) or "schemaVersion" not in raw:
+            logger.error(
+                f"Descriptions at {path} are not schema v3 (missing envelope). "
+                "Regenerate or remove the legacy file."
+            )
+            return None
+        if raw.get("schemaVersion") != "3.0":
+            logger.error(
+                f"Descriptions at {path} have unsupported schemaVersion "
+                f"{raw.get('schemaVersion')!r}; expected {'3.0'!r}."
+            )
+            return None
+        envelope = DescriptionFileEnvelope.model_validate(raw)
+        logger.info(f"Loaded {len(envelope.descriptions)} descriptions from {path}")
+        return envelope.descriptions
     except Exception as e:
         logger.error(f"Failed to load descriptions from {path}: {e}")
         return None
