@@ -40,6 +40,10 @@ def _api_key_for_provider(provider: str, fallback: str = "") -> str | None:
     return fallback or None
 
 
+def _is_empty(label: str) -> bool:
+    return not label or not label.strip()
+
+
 class CyteOnto:
     """Compare two sets of cell type annotations against the Cell Ontology.
 
@@ -345,7 +349,9 @@ class CyteOnto:
             lbl: d for lbl, d in (raw_existing or {}).items() if not d.is_blank()
         }
 
-        all_real = use_cache and all(lbl in existing for lbl in labels)
+        all_real = use_cache and all(
+            _is_empty(lbl) or lbl in existing for lbl in labels
+        )
         if all_real:
             cached = storage.load_user_embeddings(emb_path)
             if cached is not None and cached[1] == labels:
@@ -355,7 +361,9 @@ class CyteOnto:
                 return cached[0]
 
         unique_labels = list(dict.fromkeys(labels))
-        missing = [lbl for lbl in unique_labels if lbl not in existing]
+        missing = [
+            lbl for lbl in unique_labels if not _is_empty(lbl) and lbl not in existing
+        ]
         if missing:
             logger.info(
                 f"Generating {len(missing)} new descriptions for '{identifier}' "
@@ -369,13 +377,17 @@ class CyteOnto:
                     existing[lbl] = desc
             storage.save_descriptions(desc_path, existing, self.llm_key)
 
-        # Build the text to embed for every label position. Blanks are not
-        # cached, so the raw label text is used as a fallback to keep the
-        # array aligned. Next compare(...) run will retry description
-        # generation for those labels and overwrite.
-        texts: list[str] = []
+        # Build the text to embed for every label position. Empty labels are
+        # skipped entirely (no description, no embedding) and get a zero
+        # vector below. Blanks are not cached, so the raw label text is used
+        # as a fallback to keep the array aligned. Next compare(...) run will
+        # retry description generation for those labels and overwrite.
+        texts: list[str | None] = []
         fallback_count = 0
         for lbl in labels:
+            if _is_empty(lbl):
+                texts.append(None)
+                continue
             desc = existing.get(lbl, CellDescription.blank(label=lbl))
             if desc is not None and not desc.is_blank():
                 texts.append(desc.to_sentence())
@@ -389,30 +401,37 @@ class CyteOnto:
                 "label text as a fallback; they will be retried on the next run."
             )
 
-        # Only embed each unique text once, then fan results back out so the
-        # final array stays aligned with the original `labels` order/length.
+        # Only embed each unique non-empty text once, then fan results back
+        # out so the final array stays aligned with `labels` order/length.
         text_to_idx: dict[str, int] = {}
         unique_texts: list[str] = []
         for t in texts:
+            if t is None:
+                continue
             if t not in text_to_idx:
                 text_to_idx[t] = len(unique_texts)
                 unique_texts.append(t)
-        if len(unique_texts) < len(texts):
+        if len(unique_texts) < len([t for t in texts if t is not None]):
             logger.info(
                 f"Embedding {len(unique_texts)} unique texts for '{identifier}' "
                 f"({len(texts)} total label positions)"
             )
 
-        unique_embeddings = await self._embed_with_failover(unique_texts)
-        if unique_embeddings is None:
-            raise RuntimeError(f"Failed to embed labels for '{identifier}'")
+        if unique_texts:
+            unique_embeddings = await self._embed_with_failover(unique_texts)
+            if unique_embeddings is None:
+                raise RuntimeError(f"Failed to embed labels for '{identifier}'")
+            dim = unique_embeddings.shape[1]
+        else:
+            dim = self._load_ontology_embeddings()[0].shape[1]
+
         emb_path = self.paths.user_embeddings(
             run_id, kind, identifier, self.llm_key, self.embd_key
         )
-        fan_out_idx = np.fromiter(
-            (text_to_idx[t] for t in texts), dtype=np.int64, count=len(texts)
-        )
-        embeddings = unique_embeddings[fan_out_idx]
+        embeddings = np.zeros((len(labels), dim), dtype=np.float32)
+        for j, t in enumerate(texts):
+            if t is not None:
+                embeddings[j] = unique_embeddings[text_to_idx[t]]
 
         storage.save_user_embeddings(
             emb_path,
@@ -530,6 +549,7 @@ class CyteOnto:
             use_cache=use_cache,
         )
         author_matches = self._match(author_emb, min_similarity=min_match_similarity)
+        author_empty = [_is_empty(lbl) for lbl in author_labels]
         similarity = self._ensure_similarity()
 
         rows: list[dict[str, Any]] = []
@@ -548,10 +568,11 @@ class CyteOnto:
                 use_cache=use_cache,
             )
             algo_matches = self._match(algo_emb, min_similarity=min_match_similarity)
+            algo_empty = [_is_empty(lbl) for lbl in algo_labels]
 
             for i, (a_lbl, g_lbl) in enumerate(zip(author_labels, algo_labels)):
-                a_id, a_sim = author_matches[i]
-                g_id, g_sim = algo_matches[i]
+                a_id, a_sim = ("", 0.0) if author_empty[i] else author_matches[i]
+                g_id, g_sim = ("", 0.0) if algo_empty[i] else algo_matches[i]
                 hier = (
                     similarity.similarity(
                         a_id, g_id, metric=metric, metric_params=metric_params
@@ -559,7 +580,11 @@ class CyteOnto:
                     if a_id and g_id
                     else 0.0
                 )
-                method = self._method_for(a_id, g_id, hier)
+                method = (
+                    "empty"
+                    if (author_empty[i] or algo_empty[i])
+                    else self._method_for(a_id, g_id, hier)
+                )
                 rows.append(
                     {
                         "run_id": run_id,
