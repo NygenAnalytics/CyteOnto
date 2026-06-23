@@ -133,7 +133,7 @@ def create_app(volume, run_compare_fn) -> FastAPI:
         if status["state"] != "completed":
             raise HTTPException(
                 409,
-                f"Run is '{status['state']}', not completed",
+                f"Job is '{status['state']}', not completed",
             )
 
         rel = status["resultJsonPath"] if format == "json" else status["resultCsvPath"]
