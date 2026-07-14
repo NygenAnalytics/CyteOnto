@@ -1,5 +1,6 @@
 """Compare-job worker body. Runs inside the worker Modal container."""
 
+import asyncio
 import json
 import os
 import traceback
@@ -15,6 +16,18 @@ from .config import AppConfig
 
 app_config = AppConfig()
 cyte_config = CyteConfig()
+
+_INITIAL_STATUS_FIELDS = frozenset(
+    {
+        "runId",
+        "state",
+        "createdAt",
+        "numAuthorLabels",
+        "numAlgorithms",
+    }
+)
+_STATUS_LOAD_ATTEMPTS = 5
+_STATUS_LOAD_RETRY_SECONDS = 0.2
 
 
 def _env_api_key(provider: str) -> str:
@@ -67,20 +80,40 @@ def _result_paths(run_id: str) -> tuple[Path, Path]:
     return base / "result.csv", base / "result.json"
 
 
-def _read_status(run_id: str) -> dict[str, Any]:
+def _read_status(run_id: str) -> dict[str, Any] | None:
     path = _status_path(run_id)
     if not path.exists():
-        return {"runId": run_id}
+        return None
     try:
         return json.loads(path.read_text())
-    except Exception:
-        return {"runId": run_id}
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _write_status(run_id: str, status: dict[str, Any]) -> None:
     path = _status_path(run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(status, indent=2))
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(status, indent=2))
+    temporary_path.replace(path)
+
+
+async def _load_initial_status(run_id: str, volume) -> dict[str, Any]:
+    for attempt in range(_STATUS_LOAD_ATTEMPTS):
+        await volume.reload.aio()
+        status = _read_status(run_id)
+        if (
+            status is not None
+            and status.get("runId") == run_id
+            and _INITIAL_STATUS_FIELDS <= status.keys()
+        ):
+            return status
+        if attempt < _STATUS_LOAD_ATTEMPTS - 1:
+            await asyncio.sleep(_STATUS_LOAD_RETRY_SECONDS)
+
+    raise RuntimeError(
+        f"Committed initial status is missing or incomplete for run '{run_id}'"
+    )
 
 
 _LLM_BASE_URLS: dict[str, str | None] = {
@@ -136,7 +169,7 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
     from cyteonto.logger import logger
     from cyteonto.models import EmbdConfig, LlmConfig
 
-    status = _read_status(run_id)
+    status = await _load_initial_status(run_id, volume)
     status.update({"state": "running", "startedAt": _utc_now()})
     _write_status(run_id, status)
     await volume.commit.aio()

@@ -117,6 +117,22 @@ class CellDescription(BaseModel):
         return cls.blank()
 
 
+class LabelDecomposition(BaseModel):
+    """Structured output for splitting compound cell-type labels."""
+
+    initialLabel: str = Field(description="The input label, copied verbatim")
+    isCompound: bool = Field(
+        description="True when the label names multiple distinct cell types"
+    )
+    parts: list[str] = Field(
+        description="Sanitized cell-type names; one element when not compound"
+    )
+
+    @classmethod
+    def single(cls, label: str) -> "LabelDecomposition":
+        return cls(initialLabel=label, isCompound=False, parts=[label])
+
+
 class DescriptionFileEnvelope(BaseModel):
     """On-disk wrapper for a descriptions JSON file (schema v3)."""
 

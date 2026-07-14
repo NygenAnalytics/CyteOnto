@@ -2,13 +2,14 @@
  
 `cyteonto` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given label lists from a study author and one or more annotation algorithms, it:
 
-1. Generates a structured description for every label with an LLM.
-2. Embeds those descriptions with a configured embedding model.
-3. Matches each embedding to the closest CL term.
-4. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings).
-5. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
+1. Decomposes mixture labels (doublets, mixed populations) into cell-type parts with an LLM when needed.
+2. Generates a structured description for every label (or part) with an LLM.
+3. Embeds those descriptions with a configured embedding model.
+4. Matches each embedding to the closest CL term.
+5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings). Compound pairs use Hungarian bipartite matching with an optional coverage penalty when part counts differ.
+6. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
  
-Updated ReadMe: [cyteonto/README.md](cyteonto/README.md). More documentation to follow!
+Updated ReadMe: [cyteonto/README.md](cyteonto/README.md). Process flow and file layout: [docs/WORKFLOW.md](docs/WORKFLOW.md), [docs/FILE_MANAGEMENT.md](docs/FILE_MANAGEMENT.md).
 
 
 ## Modal Service

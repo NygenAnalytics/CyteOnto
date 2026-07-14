@@ -25,13 +25,16 @@ Default roots: `cyteonto/data/` for shipped and generated ontology data, `cyteon
 │       └── algorithm/
 │           ├── <algo1>_embeddings_<text>_<embd>.npz
 │           └── <algo2>_embeddings_<text>_<embd>.npz
-└── descriptions/
+├── descriptions/
+│   └── <run_id>/
+│       ├── author/
+│       │   └── author_descriptions_<text>.json
+│       └── algorithm/
+│           ├── <algo1>_descriptions_<text>.json
+│           └── <algo2>_descriptions_<text>.json
+└── decompositions/
     └── <run_id>/
-        ├── author/
-        │   └── author_descriptions_<text>.json
-        └── algorithm/
-            ├── <algo1>_descriptions_<text>.json
-            └── <algo2>_descriptions_<text>.json
+        └── decompositions_<llmKey>.json
 ```
 
 `<run_id>` and algorithm names are passed through `_clean_identifier` (e.g. `sample.run.001` becomes `sample_run_001`). Model names use `_clean_model` (slashes and colons become hyphens; case and dots are preserved).
@@ -53,6 +56,7 @@ Default roots: `cyteonto/data/` for shipped and generated ontology data, `cyteon
 | Author embeddings | `author_embeddings_<llmKey>_<embdKey>.npz` |
 | Algorithm descriptions | `<identifier>_descriptions_<llmKey>.json` |
 | Algorithm embeddings | `<identifier>_embeddings_<llmKey>_<embdKey>.npz` |
+| Label decompositions | `decompositions_<llmKey>.json` (under `decompositions/<run_id>/`, not per kind) |
 
 `kind` is either `author` or `algorithm`. For author rows, `identifier` is always `author`.
 
@@ -80,6 +84,7 @@ Custom `data_dir` must still contain `cell_ontology/cl.owl` and `cell_ontology/c
 | Ontology embeddings | NPZ exists and no descriptions were regenerated on this `from_config` call |
 | User descriptions | Label already in JSON with a non-blank `CellDescription` |
 | User embeddings | NPZ exists, embedded `labels` array matches the request exactly, and every label has a non-blank description |
+| Label decompositions | JSON exists under `decompositions/<run_id>/`, schema version matches, and every requested label is present |
 
 Blank LLM failures are not written to JSON; those labels are retried on the next call. Embeddings for those positions may still use the raw label text so array shape stays aligned.
 
@@ -130,6 +135,7 @@ tree cyteonto/data/user_files/
 # Remove one run
 rm -rf cyteonto/data/user_files/embeddings/my_run_id/
 rm -rf cyteonto/data/user_files/descriptions/my_run_id/
+rm -rf cyteonto/data/user_files/decompositions/my_run_id/
 
 du -sh cyteonto/data/user_files/embeddings/*/
 ```
