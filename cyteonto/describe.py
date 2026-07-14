@@ -250,7 +250,7 @@ async def _run_once(
         for part in getattr(msg, "parts", []):
             if isinstance(part, ToolCallPart):
                 tool_counts[part.tool_name] = tool_counts.get(part.tool_name, 0) + 1
-    usage = result.usage()
+    usage = result.usage
     return (  # type: ignore[return-value]
         result.output,
         tool_counts,
@@ -486,7 +486,7 @@ async def _run_decompose_once(
         for part in getattr(msg, "parts", []):
             if isinstance(part, ToolCallPart):
                 tool_counts[part.tool_name] = tool_counts.get(part.tool_name, 0) + 1
-    usage = result.usage()
+    usage = result.usage
     return (  # type: ignore[return-value]
         result.output,
         tool_counts,
