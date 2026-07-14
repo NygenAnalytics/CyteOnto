@@ -11,3 +11,4 @@ tmp/
 *.npz.meta
 *.json
 cyteonto_results/
+dist/
