@@ -23,7 +23,7 @@ from tenacity import (
 
 from .config import Config
 from .logger import logger
-from .models import AgentUsage, CellDescription
+from .models import AgentUsage, CellDescription, LabelDecomposition
 
 config = Config()
 
@@ -250,7 +250,7 @@ async def _run_once(
         for part in getattr(msg, "parts", []):
             if isinstance(part, ToolCallPart):
                 tool_counts[part.tool_name] = tool_counts.get(part.tool_name, 0) + 1
-    usage = result.usage()
+    usage = result.usage
     return (  # type: ignore[return-value]
         result.output,
         tool_counts,
@@ -371,4 +371,205 @@ async def describe_cells(
     else:
         logger.info(f"describe_cells summary: {total}/{total} ok")
 
+    return results, total_usage
+
+
+def _normalize_decomposition(
+    label: str, output: LabelDecomposition | None
+) -> LabelDecomposition:
+    if output is None or not output.parts:
+        return LabelDecomposition.single(label)
+    if not output.isCompound:
+        return LabelDecomposition.single(label)
+    cleaned = [p.strip() for p in output.parts if p and p.strip()]
+    if len(cleaned) < 2:
+        return LabelDecomposition.single(label)
+    return LabelDecomposition(initialLabel=label, isCompound=True, parts=cleaned)
+
+
+def _build_decompose_prompt(label: str) -> str:
+    return dedent(
+        f"""
+        Task: decide whether a cell-type annotation label refers to one cell
+        type or multiple distinct cell types.
+
+        Input label:
+        {label}
+
+        Context: labels come from single-cell RNA-seq cluster annotations.
+        Some labels name a single cell type; others name a mixture such as a
+        doublet or mixed population.
+
+        Rules:
+        - Semicolon-separated text lists synonyms for one cell type. Do not
+          split those.
+        - Commas and hyphens inside a single cell-type name do not indicate
+          multiple types.
+        - When the label names multiple distinct cell types, set isCompound to
+          true and list each type in parts as a short sanitized name suitable
+          for ontology lookup. Remove mixture qualifiers such as "doublet",
+          "mixed population", or "contamination" from part names.
+        - When the label names one cell type, set isCompound to false and set
+          parts to a list containing only the original label verbatim.
+
+        initialLabel
+            Copy the input label exactly as given.
+
+        isCompound
+            true when the label names multiple distinct cell types; false
+            otherwise.
+
+        parts
+            When isCompound is false, must contain exactly one element equal
+            to initialLabel.
+            When isCompound is true, must contain two or more sanitized
+            cell-type names.
+        """
+    ).strip()
+
+
+def _build_decompose_agent(base_agent: Agent, reasoning: bool = False) -> Agent:
+    model_settings: dict[str, Any] = {}
+    if not reasoning:
+        provider = getattr(base_agent.model, "provider", None)
+        base_url = getattr(provider, "base_url", None) if provider is not None else None
+        is_fireworks = (
+            isinstance(base_url, str)
+            and base_url.rstrip("/") == "https://api.fireworks.ai/inference/v1"
+        )
+        if is_fireworks:
+            model_settings = {
+                "extra_body": {
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": None,
+                },
+            }
+        else:
+            model_settings = {
+                "thinking": False,
+                "extra_body": {
+                    "chat_template_kwargs": {"thinking": False},
+                    "reasoning": {"enabled": False},
+                },
+            }
+
+    return Agent(
+        base_agent.model,
+        output_type=LabelDecomposition,  # type:ignore
+        name="LabelDecompositionAgent",
+        model_settings=model_settings,
+        system_prompt=(
+            "You classify cell-type annotation labels as single or compound "
+            "for ontology matching."
+        ),
+    )
+
+
+@retry(
+    stop=stop_after_attempt(config.RETRY_ATTEMPTS),
+    wait=wait_exponential(min=config.RETRY_WAIT_MIN, max=config.RETRY_WAIT_MAX),
+    retry=retry_if_exception_type(config._RETRYABLE_EXCEPTIONS),
+    before_sleep=_log_before_sleep,
+    reraise=False,
+)
+async def _run_decompose_once(
+    agent: Agent,
+    prompt: str,
+    usage_limits: UsageLimits,
+) -> tuple[LabelDecomposition, dict[str, int], int, int, int, int]:
+    result = await asyncio.wait_for(
+        agent.run(prompt, usage_limits=usage_limits),
+        timeout=config.PER_ATTEMPT_TIMEOUT,
+    )
+    tool_counts: dict[str, int] = {}
+    for msg in result.all_messages():
+        for part in getattr(msg, "parts", []):
+            if isinstance(part, ToolCallPart):
+                tool_counts[part.tool_name] = tool_counts.get(part.tool_name, 0) + 1
+    usage = result.usage
+    return (  # type: ignore[return-value]
+        result.output,
+        tool_counts,
+        usage.requests,
+        usage.input_tokens or 0,
+        usage.output_tokens or 0,
+        usage.total_tokens or 0,
+    )
+
+
+async def decompose_label(
+    base_agent: Agent,
+    label: str,
+    usage_limits: UsageLimits = config.DEFAULT_USAGE_LIMITS,
+    reasoning: bool = False,
+) -> tuple[LabelDecomposition, AgentUsage]:
+    """Decompose a label into one or more cell-type parts."""
+    agent = _build_decompose_agent(base_agent, reasoning)
+    usage = AgentUsage(agentName=agent.name or "LabelDecompositionAgent")
+    try:
+        (
+            output,
+            tool_counts,
+            req,
+            in_tok,
+            out_tok,
+            total_tok,
+        ) = await _run_decompose_once(
+            agent, _build_decompose_prompt(label), usage_limits
+        )
+    except UsageLimitExceeded as e:
+        logger.error(f"Usage limit exceeded while decomposing '{label}': {e}")
+        return LabelDecomposition.single(label), usage
+    except Exception as e:
+        logger.error(f"Decomposition failed for '{label}': {_format_exception(e)}")
+        return LabelDecomposition.single(label), usage
+
+    usage.modelName = str(agent.model.model_name)  # type: ignore
+    usage.requests = req
+    usage.inputTokens = in_tok
+    usage.outputTokens = out_tok
+    usage.totalTokens = total_tok
+    usage.toolUsage = tool_counts
+    return _normalize_decomposition(label, output), usage
+
+
+async def decompose_labels(
+    base_agent: Agent,
+    labels: list[str],
+    max_concurrent: int = config.MAX_CONCURRENT_DESCRIPTIONS,
+    reasoning: bool = False,
+) -> tuple[list[LabelDecomposition], AgentUsage]:
+    """Decompose many labels concurrently, preserving input order."""
+    if not labels:
+        return [], AgentUsage(agentName="LabelDecompositionAgent")
+
+    total = len(labels)
+    sem = asyncio.Semaphore(max_concurrent)
+    total_usage = AgentUsage(agentName="LabelDecompositionAgent")
+    results: list[LabelDecomposition] = [
+        LabelDecomposition.single(lbl) for lbl in labels
+    ]
+
+    async def run_one(i: int) -> tuple[int, LabelDecomposition, AgentUsage]:
+        lbl = labels[i]
+        async with sem:
+            dec, usage = await decompose_label(base_agent, lbl, reasoning=reasoning)
+        return i, dec, usage
+
+    logger.info(f"Decomposing {total} cell labels")
+    tasks = [run_one(i) for i in range(total)]
+    done = 0
+    for coro in asyncio.as_completed(tasks):
+        try:
+            i, dec, usage = await coro
+            results[i] = dec
+            total_usage.merge(usage)
+            done += 1
+            if done == total or done % max(1, total // 20) == 0:
+                logger.info(f"Decomposition progress: {done}/{total}")
+        except Exception as e:
+            logger.error(f"Decomposition task crashed: {_format_exception(e)}")
+
+    compound_count = sum(1 for d in results if d.isCompound)
+    logger.info(f"decompose_labels summary: {total} labels, {compound_count} compound")
     return results, total_usage

@@ -4,8 +4,11 @@ tmp/
 .env
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
 *.csv
 *.owl
 *.npz
 *.npz.meta
 *.json
+cyteonto_results/
+dist/

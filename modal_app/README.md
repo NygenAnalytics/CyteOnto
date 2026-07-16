@@ -246,12 +246,14 @@ Returns `404` if the `runId` is unknown and `409` if the run is not in state `co
 | `pair_index` | `int` | Position in the label list, starting at 0. |
 | `author_label` | `str` | Author label for this pair. |
 | `algorithm_label` | `str` | Algorithm label for this pair. |
-| `author_ontology_id` | `str \| null` | Best CL match for the author label. |
-| `author_embedding_similarity` | `float` | Cosine similarity to that CL term. |
-| `algorithm_ontology_id` | `str \| null` | Best CL match for the algorithm label. |
-| `algorithm_embedding_similarity` | `float` | Cosine similarity to that CL term. |
-| `cytescore_similarity` | `float` | Score under the chosen `metric`; `0.0` if either side is unmatched. |
-| `similarity_method` | `str` | `cytescore`, `string_similarity`, `partial_match`, or `no_matches`. |
+| `author_ontology_id` | `str` | Best CL match for the author label. Semicolon-separated for compound pairs (matched assignment only). Empty string if unmatched. |
+| `author_ontology_name` | `str` | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
+| `author_embedding_similarity` | `float` | Mean cosine similarity of author parts to their CL matches. |
+| `algorithm_ontology_id` | `str` | Best CL match for the algorithm label. Same compound rules as author. |
+| `algorithm_ontology_name` | `str` | Names for ids in `algorithm_ontology_id`. |
+| `algorithm_embedding_similarity` | `float` | Mean cosine similarity of algorithm parts to their CL matches. |
+| `cytescore_similarity` | `float` | Score under the chosen `metric`; `0.0` when scoring does not apply. |
+| `similarity_method` | `str` | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
 
 ### GET `/health`
 
@@ -423,16 +425,21 @@ Mounted at `/cyteonto_data` inside every container:
 │   └── descriptions/
 │       └── descriptions_<text>.json
 └── user_files/
-    └── <run_id>/
-        ├── status.json
-        ├── result.csv
-        ├── result.json
-        ├── embeddings/
-        │   ├── author/author_embeddings_<llmKey>_<embdKey>.npz
-        │   └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
-        └── descriptions/
-            ├── author/author_descriptions_<text>.json
-            └── algorithm/<algo_name>_descriptions_<text>.json
+    ├── <run_id>/
+    │   ├── status.json
+    │   ├── result.csv
+    │   └── result.json
+    ├── embeddings/
+    │   └── <run_id>/
+    │       ├── author/author_embeddings_<llmKey>_<embdKey>.npz
+    │       └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
+    ├── descriptions/
+    │   └── <run_id>/
+    │       ├── author/author_descriptions_<text>.json
+    │       └── algorithm/<algo_name>_descriptions_<text>.json
+    └── decompositions/
+        └── <run_id>/
+            └── decompositions_<llmKey>.json
 ```
 
 `<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.

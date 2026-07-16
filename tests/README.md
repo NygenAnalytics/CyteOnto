@@ -18,7 +18,7 @@ tests/
 ├── test_embed.py          # Embedding HTTP helpers and orchestration
 ├── test_describe.py       # Prompt building and error formatting
 ├── test_pubmed.py         # PubMed abstract retrieval
-└── test_cyteonto.py       # Orchestrator pure units (matching, key resolution)
+└── test_cyteonto.py       # Orchestrator units (decomposition, Hungarian compound scoring, compare)
 ```
 
 ## Running
@@ -32,6 +32,12 @@ uv run pytest -v
 
 # Single test
 uv run pytest tests/test_models.py::TestCellDescription::test_to_sentence
+
+# Compound scoring and compare integration
+uv run pytest tests/test_cyteonto.py::TestHungarianMatchMean tests/test_cyteonto.py::TestCompareCompoundLabels -v
+
+# Label decomposition helpers (in test_cyteonto.py)
+uv run pytest tests/test_cyteonto.py -k "Decompos or decompose" -v
 
 # Drop into debugger on failure
 uv run pytest --pdb

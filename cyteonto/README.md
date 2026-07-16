@@ -4,11 +4,12 @@ Semantic comparison of cell type annotations against the [Cell Ontology (CL)](ht
 
 Given two parallel lists of cell type labels (one from the study author, one from an annotation algorithm), the package:
 
-1. Generates a structured description for each label using an LLM.
-2. Embeds those descriptions with a configured embedding model.
-3. Matches each embedding to the closest CL term via cosine similarity.
-4. Scores each author/algorithm pair using an ontology-aware similarity metric (default: kernelised cosine on the CL term embeddings).
-5. Returns a tidy `pandas.DataFrame` with per-pair scores.
+1. Decomposes mixture labels into cell-type parts with an LLM when the label names multiple types.
+2. Generates a structured description for each label or part using an LLM.
+3. Embeds those descriptions with a configured embedding model.
+4. Matches each embedding to the closest CL term via cosine similarity.
+5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: kernelised cosine on the CL term embeddings). Compound pairs use Hungarian match mean with a coverage penalty when part counts differ.
+6. Returns a tidy `pandas.DataFrame` with per-pair scores.
 
 All LLM descriptions and embeddings are persisted on disk and reused across runs.
 
@@ -22,10 +23,10 @@ cyteonto/
 ├── config.py         Environment variables (API keys, log level)
 ├── logger.py         Loguru configuration
 ├── paths.py          PathConfig, single source of truth for file locations
-├── models.py         CellDescription, EmbdConfig, AgentUsage
+├── models.py         CellDescription, LabelDecomposition, EmbdConfig, AgentUsage
 ├── storage.py        NPZ and JSON read/write (ontology + user variants)
 ├── embed.py          Async HTTP embedding generation
-├── describe.py       LLM description generation with optional PubMed tool
+├── describe.py       LLM description and compound-label decomposition
 ├── ontology.py       OntologyMapping (CSV) and OntologySimilarity (OWL + metrics)
 ├── cyteonto.py       CyteOnto orchestrator class
 └── data/             Shipped and generated data (see "On-disk layout")
@@ -102,7 +103,7 @@ print(df)
 print("run_id used:", df["run_id"].iloc[0])
 ```
 
-If you omit `run_id`, the call generates one of the form `run-<uuid4>` and logs it at INFO level. Pick it up from the logs or from `df["run_id"].iloc[0]`. The same id is used on disk under `user_files/embeddings/<run_id>/` and `user_files/descriptions/<run_id>/`.
+If you omit `run_id`, the call generates one of the form `run-<uuid4>` and logs it at INFO level. Pick it up from the logs or from `df["run_id"].iloc[0]`. The same id is used on disk under `user_files/embeddings/<run_id>/`, `user_files/descriptions/<run_id>/`, and `user_files/decompositions/<run_id>/`.
 
 To remove the cached user artifacts for that run later:
 
@@ -123,12 +124,14 @@ One row per `(algorithm, pair_index)`:
 | `pair_index`                      | int         | Position inside the label list, starting at 0.                               |
 | `author_label`                    | str         | The author label for this pair.                                              |
 | `algorithm_label`                 | str         | The algorithm label for this pair.                                           |
-| `author_ontology_id`              | str or None | Best CL match for the author label, or `None` if below threshold.            |
-| `author_embedding_similarity`     | float       | Cosine similarity between the author embedding and its CL match.             |
-| `algorithm_ontology_id`           | str or None | Best CL match for the algorithm label.                                       |
-| `algorithm_embedding_similarity`  | float       | Cosine similarity between the algorithm embedding and its CL match.          |
-| `cytescore_similarity`            | float       | Score under the chosen `metric`; `0.0` if either side is unmatched.          |
-| `similarity_method`               | str         | `cytescore`, `string_similarity`, `partial_match`, or `no_matches`.          |
+| `author_ontology_id`              | str         | Best CL match for the author label. For compound pairs, semicolon-separated ids from the Hungarian assignment only. Empty string if unmatched. |
+| `author_ontology_name`            | str         | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
+| `author_embedding_similarity`     | float       | Mean cosine similarity between author part embeddings and their CL matches. |
+| `algorithm_ontology_id`           | str         | Best CL match for the algorithm label. Same compound rules as author. |
+| `algorithm_ontology_name`         | str         | Names for ids in `algorithm_ontology_id`. |
+| `algorithm_embedding_similarity`  | float       | Mean cosine similarity between algorithm part embeddings and their CL matches. |
+| `cytescore_similarity`            | float       | Score under the chosen `metric`; `0.0` if either side is unmatched. |
+| `similarity_method`               | str         | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
 
 ---
 
@@ -269,14 +272,37 @@ Constraints:
 
 Call flow:
 
-1. `_embed_user_labels(author_labels, kind="author", identifier="author")` returns a `(N, D)` NumPy array.
-2. `_match(author_emb)` returns the best CL id and similarity for each row.
-3. `_ensure_similarity()` lazy-loads the OWL file and the ontology embeddings into `OntologySimilarity`.
-4. For each `(algo_name, algo_labels)`:
-   - `_embed_user_labels(algo_labels, kind="algorithm", identifier=algo_name)`.
-   - `_match(algo_emb)`.
-   - For each index `i`, `similarity.similarity(author_id, algo_id, metric=..., metric_params=...)` if both ids are present; otherwise `0.0`.
-5. Rows are concatenated into a DataFrame with columns from `RESULT_COLUMNS`.
+1. `_resolve_label_parts` decomposes unique labels via LLM (cached per `run_id` under `decompositions/`).
+2. `_embed_user_labels` on the union of sanitized parts per side (author, then each algorithm).
+3. `_match` returns the best CL id and similarity for each part.
+4. `_ensure_similarity()` lazy-loads the OWL file and the ontology embeddings into `OntologySimilarity`.
+5. For each aligned pair index:
+   - **Simple pair** (one part on each side): single `OntologySimilarity.similarity` call; `similarity_method` from `_method_for`.
+   - **Compound pair** (more than one part on either side): build an m×n score matrix, run Hungarian max-weight matching, average assigned scores; multiply by `min(m,n)/max(m,n)` when `m ≠ n`; `similarity_method = cytescore_compound`.
+6. Rows are concatenated into a DataFrame with columns from `RESULT_COLUMNS`.
+
+### Compound label scoring
+
+Mixture labels such as doublets or mixed populations are poor matches when embedded as a single string. `compare` therefore:
+
+1. Calls `decompose_labels` to split a label into one or more cell-type parts (semicolon-separated synonyms stay as one part).
+2. Embeds and matches each unique part.
+3. Scores compound pairs with **Hungarian match mean**:
+   - Build matrix `S` where `S[i,j]` is the cytescore between author part `i` and algorithm part `j`.
+   - Pick `k = min(m,n)` one-to-one assignments that maximize total score.
+   - `match_mean` = mean of assigned cell scores.
+   - If `m ≠ n`, multiply by coverage `min(m,n) / max(m,n)`.
+4. Writes `similarity_method = cytescore_compound`. Ontology ids and names list only the matched assignment pairs (semicolon-separated when `k > 1`).
+
+Illustrative scores (see `notebooks/quick_tutorial.ipynb`):
+
+| Scenario | m×n | Typical score |
+|----------|-----|---------------|
+| Same compound | 2×2 | ~1.0 |
+| One shared type | 2×2 | ~0.5 |
+| No shared types | 2×2 | ~0.07 |
+| Partial overlap, extra author type | 3×2 | ~0.35 |
+| Author doublet vs single type | 2×1 | best match × 0.5 |
 
 ### `compare_anndata` (async)
 
@@ -299,7 +325,7 @@ cyto.purge_stale(run_id=None) -> int
 # deletes user NPZs that lack the inline `labels` key (legacy format)
 ```
 
-Scope is `data/user_files/embeddings/` and the matching `descriptions/` subtree (optionally filtered by `run_id`).
+Scope is `data/user_files/embeddings/` and the matching `descriptions/` subtree (optionally filtered by `run_id`). Decomposition caches live under `decompositions/<run_id>/` and are not removed by `clear_run` today.
 
 ### `usage`
 
@@ -311,25 +337,23 @@ Scope is `data/user_files/embeddings/` and the matching `descriptions/` subtree 
 
 ```
 CyteOnto.compare
- ├─ _embed_user_labels(author_labels, kind="author", identifier="author")
- │   ├─ storage.load_descriptions(path)          (drop any cached blanks)
- │   ├─ storage.load_user_embeddings(path)       (cache hit only when labels match AND every description is non-blank)
- │   ├─ describe.describe_cells(missing_or_blank) (LLM calls for anything new, plus a 2nd pass for blanks)
- │   │   └─ describe.describe_cell (per label, tenacity-retried agent.run with per-attempt timeout)
- │   ├─ embed.embed_texts(sentences, EmbdConfig) (label text is used as a fallback for still-blank slots)
- │   ├─ storage.save_descriptions                (blanks are filtered out)
+ ├─ _resolve_label_parts(author_labels)            (LLM decompose + decompositions JSON cache)
+ ├─ _embed_user_labels(unique author parts, ...)
+ │   ├─ storage.load_descriptions(path)
+ │   ├─ storage.load_user_embeddings(path)
+ │   ├─ describe.describe_cells(missing_or_blank)
+ │   ├─ embed.embed_texts(sentences, EmbdConfig)
+ │   ├─ storage.save_descriptions
  │   └─ storage.save_user_embeddings
- ├─ _match(author_emb)
- │   ├─ storage.load_ontology_embeddings         (cached on the instance)
- │   └─ sklearn.cosine_similarity
+ ├─ _match(author_part_emb)
  ├─ _ensure_similarity
- │   └─ OntologySimilarity(owl_path, embeddings_path)
- │       ├─ owlready2.get_ontology(...).load()
- │       └─ np.load(ontology_embeddings_npz)
  └─ for each algorithm:
-     ├─ _embed_user_labels(algo_labels, kind="algorithm", identifier=algo_name)
-     ├─ _match(algo_emb)
-     └─ OntologySimilarity.similarity(a_id, g_id, metric, metric_params)
+     ├─ _resolve_label_parts(algo_labels)
+     ├─ _embed_user_labels(unique algo parts, ...)
+     ├─ _match(algo_part_emb)
+     └─ for each pair_index:
+         ├─ simple: OntologySimilarity.similarity(a_id, g_id, ...)
+         └─ compound: build S, _hungarian_match_mean(S) → cytescore_compound
 ```
 
 ---
@@ -392,7 +416,11 @@ Usage limits default to `request_limit=50, input_tokens_limit=60_000`. Override 
 2. If any slot came back blank, sleeps `second_pass_wait_seconds` and reruns `describe_cell` only for those labels. This gives a transient outage a full second set of 4 retries without requiring the caller to rerun anything.
 3. Emits a single end-of-batch summary at `INFO` on full success, or `WARNING` if anything stayed blank (listing the first ten offending labels and truncating the rest).
 
-Tune this by editing the constants at the top of `describe.py` or by passing `second_pass_wait_seconds` explicitly; the other values are module-level for now.
+### Compound label decomposition
+
+`describe.decompose_label` and `describe.decompose_labels` call a dedicated LLM agent with `output_type=LabelDecomposition`. The model decides whether a label names multiple cell types (doublets, mixed populations) and returns sanitized parts. Semicolon-separated synonyms stay as one part. Results are cached per `run_id` under `user_files/decompositions/<run_id>/decompositions_<llmKey>.json`.
+
+Tune description batching by editing the constants at the top of `describe.py` or by passing `second_pass_wait_seconds` explicitly; the other values are module-level for now.
 
 ### `CellDescription` schema
 
@@ -413,6 +441,16 @@ Tune this by editing the constants at the top of `describe.py` or by passing `se
 ```
 
 `CellDescription.blank(label)` returns a zeroed instance used as a fallback after an unrecoverable LLM failure.
+
+### `LabelDecomposition` schema
+
+| Field          | Type        | Notes |
+|----------------|-------------|-------|
+| `initialLabel` | `str`       | Input label, copied verbatim. |
+| `isCompound`   | `bool`      | `true` when the label names more than one cell type. |
+| `parts`        | `list[str]` | Sanitized cell-type parts. For non-compound labels, a single element equal to the label. |
+
+Used only for decomposition; descriptions are generated per part afterward.
 
 ### PubMed tool
 
@@ -516,10 +554,13 @@ Set via `PathConfig(data_dir=..., user_dir=...)`:
 │   └── <run_id>/
 │       ├── author/author_embeddings_<llmKey>_<embdKey>.npz
 │       └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
-└── descriptions/
+├── descriptions/
+│   └── <run_id>/
+│       ├── author/author_descriptions_<llmKey>.json
+│       └── algorithm/<algo_name>_descriptions_<llmKey>.json
+└── decompositions/
     └── <run_id>/
-        ├── author/author_descriptions_<llmKey>.json
-        └── algorithm/<algo_name>_descriptions_<llmKey>.json
+        └── decompositions_<llmKey>.json
 ```
 
 Filename rules (`ModelArtifactKey.filename_segment`, `paths._clean_identifier`):
@@ -541,6 +582,7 @@ Pre-v3 caches (`descriptions_moonshotai-Kimi-K2.6.json`, etc.) are ignored. Dele
 | Ontology embeddings NPZ           | File missing, any description was regenerated on this call, or `force_regenerate=True`. |
 | User author/algorithm embeddings  | File missing, `labels` array inside the NPZ differs from the request, or any description for a requested label is missing or blank. |
 | User author/algorithm descriptions| Per-label: any label missing from the existing JSON or cached as blank is regenerated; non-blank existing entries are kept. |
+| Label decompositions JSON         | Per-label: any label missing from the JSON is decomposed via LLM; keyed by raw label string under `decompositions`. |
 
 Per-label description caching means that adding one new label to a run does not recompute descriptions for existing labels; only the new label hits the LLM.
 
@@ -560,7 +602,9 @@ When `use_cache=False` is passed to `compare`, all cache lookups are skipped and
 - User embedding generation failure: `compare` raises `RuntimeError` with the offending identifier.
 - Label length mismatch between author and algorithm lists: `compare` raises `ValueError`.
 - Duplicate algorithm name or an algorithm named `"author"`: `compare` raises `ValueError`.
-- Ontology match below `min_match_similarity`: CL id stored as `None`, `similarity_method` becomes `partial_match` or `no_matches`.
+- Ontology match below `min_match_similarity`: CL id stored as empty string, `similarity_method` becomes `partial_match` or `no_matches`.
+- Both labels empty on a pair: `similarity_method = empty`, ontology fields blank.
+- One label empty on a pair: non-empty side keeps its ontology id and name; score `0.0`; `similarity_method = empty`.
 - OWL class not found for a CL id during hierarchy metrics: falls back to `simple` similarity with a warning.
 - Per-label LLM failure: the label gets a blank `CellDescription` after 4 attempts and a second-pass retry; the run continues. The blank is not persisted to the descriptions JSON and will be retried on the next call. The corresponding embedding row is computed using the raw label text so the NPZ stays aligned with the requested label list.
 - Per-request embedding failure: the whole `embed_texts` call returns `None` after 3 tenacity retries, which surfaces as a `RuntimeError` from `_embed_user_labels`.

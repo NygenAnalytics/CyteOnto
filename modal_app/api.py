@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -16,6 +17,7 @@ from .models import CompareRequest, CompareResponse, StatusResponse
 
 app_config = AppConfig()
 cyte_config = CyteConfig()
+_volume_lock = Lock()
 
 
 def _utc_now() -> str:
@@ -27,21 +29,25 @@ def _status_path(run_id: str) -> Path:
 
 
 def _read_status(run_id: str, volume) -> dict[str, Any] | None:
-    volume.reload()
-    path = _status_path(run_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
+    with _volume_lock:
+        volume.reload()
+        path = _status_path(run_id)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
 
 
 def _write_status(run_id: str, data: dict[str, Any], volume) -> None:
-    path = _status_path(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
-    volume.commit()
+    with _volume_lock:
+        path = _status_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f".{path.name}.tmp")
+        temporary_path.write_text(json.dumps(data, indent=2))
+        temporary_path.replace(path)
+        volume.commit()
 
 
 def create_app(volume, run_compare_fn) -> FastAPI:
