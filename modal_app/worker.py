@@ -217,6 +217,7 @@ async def run_compare_job(run_id: str, payload: dict[str, Any], volume) -> None:
             metric_params=payload.get("metricParams"),
             min_match_similarity=payload["minMatchSimilarity"],
             use_cache=payload["useCache"],
+            compound_scoring=payload.get("compoundScoring", "max"),
         )
 
         csv_path.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import pandas as pd  # type: ignore
 import requests
 from tqdm.auto import tqdm  # type: ignore
 
@@ -45,6 +46,9 @@ BACKUP_LLM_KEY = BACKUP_LLM.to_artifact_key()
 BACKUP_EMBD_KEY = BACKUP_EMBEDDING.to_artifact_key()
 
 ONTOLOGY_CSV_URL: str = f"{BASE_URL}/cell_ontology/cell_to_cell_ontology.csv"
+ONTOLOGY_ENRICHED_CSV_URL: str = (
+    f"{BASE_URL}/cell_ontology/cell_to_cell_ontology_enriched.csv"
+)
 ONTOLOGY_OWL_URL: str = f"{BASE_URL}/cell_ontology/cl.owl"
 
 
@@ -59,24 +63,32 @@ def _embeddings_url(llm_key: ModelArtifactKey, embd_key: ModelArtifactKey) -> st
     )
 
 
-def _ontology_artifact_targets(paths: PathConfig) -> list[tuple[str, Path]]:
-    """Primary and backup description + embedding files on the CDN."""
-    pairs: list[tuple[ModelArtifactKey, ModelArtifactKey]] = [
-        (PRIMARY_LLM_KEY, PRIMARY_EMBD_KEY),
-        (BACKUP_LLM_KEY, BACKUP_EMBD_KEY),
+def _primary_ontology_artifact_targets(
+    paths: PathConfig,
+) -> list[tuple[str, Path]]:
+    return [
+        (
+            _descriptions_url(PRIMARY_LLM_KEY),
+            paths.ontology_descriptions(PRIMARY_LLM_KEY),
+        ),
+        (
+            _embeddings_url(PRIMARY_LLM_KEY, PRIMARY_EMBD_KEY),
+            paths.ontology_embeddings(PRIMARY_LLM_KEY, PRIMARY_EMBD_KEY),
+        ),
     ]
-    targets: list[tuple[str, Path]] = []
-    for llm_key, embd_key in pairs:
-        targets.append(
-            (_descriptions_url(llm_key), paths.ontology_descriptions(llm_key))
-        )
-        targets.append(
-            (
-                _embeddings_url(llm_key, embd_key),
-                paths.ontology_embeddings(llm_key, embd_key),
-            )
-        )
-    return targets
+
+
+def _backup_ontology_artifact_targets(paths: PathConfig) -> list[tuple[str, Path]]:
+    return [
+        (
+            _descriptions_url(BACKUP_LLM_KEY),
+            paths.ontology_descriptions(BACKUP_LLM_KEY),
+        ),
+        (
+            _embeddings_url(BACKUP_LLM_KEY, BACKUP_EMBD_KEY),
+            paths.ontology_embeddings(BACKUP_LLM_KEY, BACKUP_EMBD_KEY),
+        ),
+    ]
 
 
 def _download(url: str, destination: Path, *, force: bool) -> bool:
@@ -130,23 +142,78 @@ def main() -> int:
 
     paths = PathConfig(data_dir=args.data_dir)
 
-    targets = [
+    required_targets = [
         (ONTOLOGY_CSV_URL, paths.ontology_csv),
         (ONTOLOGY_OWL_URL, paths.ontology_owl),
-        *_ontology_artifact_targets(paths),
+        *_primary_ontology_artifact_targets(paths),
     ]
+    optional_targets = _backup_ontology_artifact_targets(paths)
 
-    failures: list[str] = []
-    for url, dest in targets:
+    required_failures: list[str] = []
+    for url, dest in required_targets:
         try:
             _download(url, dest, force=args.force)
         except Exception as exc:
             logger.error(f"Failed to download {dest.name}: {exc}")
-            failures.append(dest.name)
+            required_failures.append(dest.name)
 
-    if failures:
-        logger.error(f"{len(failures)} download(s) failed: {failures}")
+    if required_failures:
+        logger.error(
+            f"{len(required_failures)} required download(s) failed: {required_failures}"
+        )
         return 1
+
+    optional_failures: list[str] = []
+    for url, dest in optional_targets:
+        try:
+            _download(url, dest, force=args.force)
+        except Exception as exc:
+            logger.warning(f"Optional backup download failed for {dest.name}: {exc}")
+            optional_failures.append(dest.name)
+
+    if optional_failures:
+        logger.warning(
+            f"{len(optional_failures)} optional backup download(s) failed: "
+            f"{optional_failures}; continuing with primary model pair only"
+        )
+
+    enriched_path = paths.ontology_enriched_csv
+    try:
+        _download(ONTOLOGY_ENRICHED_CSV_URL, enriched_path, force=args.force)
+    except Exception as exc:
+        logger.warning(
+            f"Enriched ontology CSV not available from CDN ({exc}); "
+            "will build locally from the shipped original if needed"
+        )
+
+    csv_path = paths.ontology_csv
+    if not enriched_path.exists() and csv_path.exists():
+        logger.info("Building enriched ontology CSV locally from shipped original")
+        df = pd.read_csv(csv_path)
+        df["label_normalized"] = df["label"].astype(str).str.lower()
+        dup_mask = df.duplicated(subset=["ontology_id", "label_normalized"], keep=False)
+        if dup_mask.any():
+            for (oid, norm), grp in df[dup_mask].groupby(
+                ["ontology_id", "label_normalized"]
+            ):
+                originals = grp["label"].astype(str).tolist()
+                logger.warning(
+                    f"Normalized label collision for {oid} {norm!r}: "
+                    f"original labels {originals}; keeping {originals[0]!r}"
+                )
+        before = len(df)
+        df = df.drop_duplicates(
+            subset=["ontology_id", "label_normalized"], keep="first"
+        )
+        dropped = before - len(df)
+        if dropped:
+            logger.info(
+                f"Dropped {dropped} duplicate ontology rows "
+                "(same ontology_id and label_normalized)"
+            )
+        enriched_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(enriched_path, index=False)
+        logger.info(f"Wrote enriched ontology CSV: {enriched_path}")
 
     logger.info(f"Setup complete. Data tree is ready under {paths.data_dir}")
     return 0

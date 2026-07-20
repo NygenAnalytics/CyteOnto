@@ -19,6 +19,7 @@ class PathConfig:
     Layout produced under ``data_dir``::
 
         cell_ontology/cell_to_cell_ontology.csv
+        cell_ontology/cell_to_cell_ontology_enriched.csv
         cell_ontology/cl.owl
         embedding/cell_ontology/embeddings_<llmKey>_<embdKey>.npz
         embedding/descriptions/descriptions_<llmKey>.json
@@ -42,6 +43,18 @@ class PathConfig:
     @property
     def ontology_csv(self) -> Path:
         return self.data_dir / "cell_ontology" / "cell_to_cell_ontology.csv"
+
+    @property
+    def ontology_enriched_csv(self) -> Path:
+        return self.data_dir / "cell_ontology" / "cell_to_cell_ontology_enriched.csv"
+
+    @property
+    def ontology_mapping_csv(self) -> Path:
+        """CSV used for lookups: enriched file when present, else shipped original."""
+        enriched = self.ontology_enriched_csv
+        if enriched.exists():
+            return enriched
+        return self.ontology_csv
 
     @property
     def ontology_owl(self) -> Path:
@@ -113,5 +126,6 @@ class PathConfig:
     def core_files_present(self) -> dict[str, bool]:
         return {
             "ontology_csv": self.ontology_csv.exists(),
+            "ontology_enriched_csv": self.ontology_enriched_csv.exists(),
             "ontology_owl": self.ontology_owl.exists(),
         }

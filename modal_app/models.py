@@ -48,6 +48,7 @@ class CompareRequest(BaseModel):
     metric: str = "cosine_kernel"
     metricParams: dict[str, Any] | None = None
     minMatchSimilarity: float = Field(default=0.1, ge=0.0, le=1.0)
+    compoundScoring: Literal["max", "hungarian_mean"] = "max"
     useCache: bool = True
 
 

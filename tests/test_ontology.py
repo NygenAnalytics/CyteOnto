@@ -20,7 +20,7 @@ class TestOntologyMapping:
     def test_label_to_id_and_back(self, sample_ontology_csv_file):
         mapping = OntologyMapping(sample_ontology_csv_file)
         mapping.load()
-        assert mapping.label_to_id("T cell") == "CL:0000001"
+        assert mapping.label_to_id("t cell") == "CL:0000001"
         assert mapping.label_to_id("not a cell") is None
         assert mapping.labels_for_id("CL:0000002") == ["B cell"]
         assert mapping.labels_for_id("CL:9999999") == []
@@ -39,8 +39,22 @@ class TestOntologyMapping:
         joined_by_id = dict(zip(ids, joined))
 
         assert set(ids) == {"CL:0000001", "CL:0000002"}
-        assert joined_by_id["CL:0000001"] == "T cell;T lymphocyte"
-        assert joined_by_id["CL:0000002"] == "B cell"
+        assert joined_by_id["CL:0000001"] == "t cell;t lymphocyte"
+        assert joined_by_id["CL:0000002"] == "b cell"
+
+    def test_load_lowercases_mixed_case_labels(self, temp_dir):
+        data = {
+            "ontology_id": ["CL:0000786", "CL:0000623"],
+            "label": ["Plasma cell", "NK cell"],
+        }
+        csv_path = temp_dir / "mixed.csv"
+        pd.DataFrame(data).to_csv(csv_path, index=False)
+
+        mapping = OntologyMapping(csv_path)
+        mapping.load()
+
+        assert mapping.label_to_id("plasma cell") == "CL:0000786"
+        assert mapping.labels_for_id("CL:0000623") == ["NK cell"]
 
 
 class TestOntologySimilarityHelpers:

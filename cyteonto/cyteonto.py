@@ -6,7 +6,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -152,7 +152,7 @@ class CyteOnto:
         self.max_description_concurrency = max_description_concurrency
         self.use_pubmed_tool = use_pubmed_tool
         self.reasoning = reasoning
-        self.mapping = OntologyMapping(self.paths.ontology_csv)
+        self.mapping = OntologyMapping(self.paths.ontology_mapping_csv)
         self.usage = AgentUsage(agentName="CyteOnto", modelName=llm.model)
         self.model_pair_usage = ModelPairUsage(llm=llm, embedding=self.embedding)
 
@@ -487,19 +487,28 @@ class CyteOnto:
     # matching + scoring
 
     def _match(
-        self, query_embeddings: np.ndarray, min_similarity: float = 0.1
+        self,
+        query_embeddings: np.ndarray,
+        min_similarity: float = 0.1,
+        # labels: list[str] | None = None
     ) -> list[tuple[str | None, float]]:
         onto_emb, onto_ids = self._load_ontology_embeddings()
         if query_embeddings.ndim == 1:
             query_embeddings = query_embeddings.reshape(1, -1)
         sims = cosine_similarity(query_embeddings, onto_emb)
         out: list[tuple[str | None, float]] = []
-        for row in sims:
+        for i, row in enumerate(sims):
             idx = int(np.argmax(row))
+            # nearest_5 = [
+            #     (str(onto_ids[int(j)]), float(row[int(j)])) for j in np.argsort(row)[::-1][:5]
+            # ]
             score = float(row[idx])
             if score < min_similarity:
                 out.append((None, score))
             else:
+                # if labels is not None:
+                #     logger.info(f"ontology match for {labels[i]!r}: {onto_ids[idx]!r} {score:.4f}")
+                #     logger.info(f"nearest 5: {nearest_5}")
                 out.append((str(onto_ids[idx]), score))
         return out
 
@@ -610,6 +619,7 @@ class CyteOnto:
         metric_params: dict[str, Any] | None = None,
         min_match_similarity: float = 0.1,
         use_cache: bool = True,
+        compound_scoring: Literal["max", "hungarian_mean"] = "max",
     ) -> pd.DataFrame:
         """Compare author labels with one or more algorithm label sets.
 
@@ -629,12 +639,21 @@ class CyteOnto:
                 unmatched against the ontology.
             use_cache: When ``True``, reuse on-disk embeddings and descriptions if
                 the labels match.
+            compound_scoring: How to reduce the m×n part score matrix for compound
+                pairs. ``"max"`` takes the maximum entry; ``"hungarian_mean"`` uses
+                Hungarian assignment mean with a coverage penalty when m != n.
 
         Returns:
             DataFrame with one row per (algorithm, pair_index) combination. The
             ``run_id`` column is populated with the id used for this call (the
             caller-provided value or the auto-generated UUID).
         """
+        if compound_scoring not in ("max", "hungarian_mean"):
+            raise ValueError(
+                f"compound_scoring must be 'max' or 'hungarian_mean', "
+                f"got {compound_scoring!r}"
+            )
+
         if run_id is None:
             run_id = f"run-{uuid.uuid4()}"
             logger.info(
@@ -657,6 +676,17 @@ class CyteOnto:
                 raise ValueError("Algorithm name 'author' is reserved")
             seen.add(name)
 
+        author_labels = [
+            lbl.lower() if not _is_empty(lbl) else lbl for lbl in author_labels
+        ]
+        algo_items = [
+            (
+                name,
+                [lbl.lower() if not _is_empty(lbl) else lbl for lbl in labels],
+            )
+            for name, labels in algo_items
+        ]
+
         logger.info(
             f"compare(run_id='{run_id}', author={len(author_labels)}, "
             f"algorithms={len(algo_items)}, metric='{metric}')"
@@ -676,7 +706,12 @@ class CyteOnto:
             identifier="author",
             use_cache=use_cache,
         )
-        author_matches = self._match(author_emb, min_similarity=min_match_similarity)
+
+        author_matches = self._match(
+            author_emb,
+            min_similarity=min_match_similarity,
+            # labels=author_parts_list
+        )
         author_lookup = dict(zip(author_parts_list, author_matches))
         author_empty = [_is_empty(lbl) for lbl in author_labels]
         similarity = self._ensure_similarity()
@@ -700,7 +735,11 @@ class CyteOnto:
                 identifier=algo_name,
                 use_cache=use_cache,
             )
-            algo_matches = self._match(algo_emb, min_similarity=min_match_similarity)
+            algo_matches = self._match(
+                algo_emb,
+                min_similarity=min_match_similarity,
+                # labels=algo_parts_list
+            )
             algo_lookup = dict(zip(algo_parts_list, algo_matches))
             algo_empty = [_is_empty(lbl) for lbl in algo_labels]
 
@@ -729,10 +768,13 @@ class CyteOnto:
                     if author_empty[i]:
                         g_parts = algo_parts_map[g_lbl]
                         g_part_sims = [algo_lookup[gp][1] for gp in g_parts]
-                        g_part_ids = [
-                            algo_lookup[gp][0] for gp in g_parts if algo_lookup[gp][0]
-                        ]
-                        g_id_out = ";".join(dict.fromkeys(g_part_ids))
+                        g_ids = [algo_lookup[gp][0] or "" for gp in g_parts]
+                        g_id_out = ";".join(g_ids)
+                        g_emb_out: str | float = (
+                            ";".join(str(round(s, 4)) for s in g_part_sims)
+                            if len(g_parts) > 1
+                            else round(g_part_sims[0], 4)
+                        )
                         rows.append(
                             {
                                 "run_id": run_id,
@@ -744,12 +786,11 @@ class CyteOnto:
                                 "author_ontology_name": "",
                                 "author_embedding_similarity": 0.0,
                                 "algorithm_ontology_id": g_id_out,
-                                "algorithm_ontology_name": self._ontology_names_for_ids(
-                                    g_id_out
+                                "algorithm_ontology_name": ";".join(
+                                    self._ontology_name_for_id(oid) if oid else ""
+                                    for oid in g_ids
                                 ),
-                                "algorithm_embedding_similarity": round(
-                                    sum(g_part_sims) / len(g_part_sims), 4
-                                ),
+                                "algorithm_embedding_similarity": g_emb_out,
                                 "cytescore_similarity": 0.0,
                                 "similarity_method": "empty",
                             }
@@ -757,12 +798,13 @@ class CyteOnto:
                     else:
                         a_parts = author_parts_map[a_lbl]
                         a_part_sims = [author_lookup[ap][1] for ap in a_parts]
-                        a_part_ids = [
-                            author_lookup[ap][0]
-                            for ap in a_parts
-                            if author_lookup[ap][0]
-                        ]
-                        a_id_out = ";".join(dict.fromkeys(a_part_ids))
+                        a_ids = [author_lookup[ap][0] or "" for ap in a_parts]
+                        a_id_out = ";".join(a_ids)
+                        a_emb_out: str | float = (
+                            ";".join(str(round(s, 4)) for s in a_part_sims)
+                            if len(a_parts) > 1
+                            else round(a_part_sims[0], 4)
+                        )
                         rows.append(
                             {
                                 "run_id": run_id,
@@ -771,12 +813,11 @@ class CyteOnto:
                                 "author_label": a_lbl,
                                 "algorithm_label": g_lbl,
                                 "author_ontology_id": a_id_out,
-                                "author_ontology_name": self._ontology_names_for_ids(
-                                    a_id_out
+                                "author_ontology_name": ";".join(
+                                    self._ontology_name_for_id(oid) if oid else ""
+                                    for oid in a_ids
                                 ),
-                                "author_embedding_similarity": round(
-                                    sum(a_part_sims) / len(a_part_sims), 4
-                                ),
+                                "author_embedding_similarity": a_emb_out,
                                 "algorithm_ontology_id": "",
                                 "algorithm_ontology_name": "",
                                 "algorithm_embedding_similarity": 0.0,
@@ -792,9 +833,30 @@ class CyteOnto:
 
                 a_part_sims = [author_lookup[ap][1] for ap in a_parts]
                 g_part_sims = [algo_lookup[gp][1] for gp in g_parts]
-                a_sim_mean = sum(a_part_sims) / len(a_part_sims)
-                g_sim_mean = sum(g_part_sims) / len(g_part_sims)
                 is_compound = m > 1 or n > 1
+
+                a_ids = [author_lookup[ap][0] or "" for ap in a_parts]
+                g_ids = [algo_lookup[gp][0] or "" for gp in g_parts]
+                a_id_out = ";".join(a_ids)
+                g_id_out = ";".join(g_ids)
+                a_name_out = ";".join(
+                    self._ontology_name_for_id(oid) if oid else "" for oid in a_ids
+                )
+                g_name_out = ";".join(
+                    self._ontology_name_for_id(oid) if oid else "" for oid in g_ids
+                )
+                if len(a_parts) > 1:
+                    a_emb_out: str | float = ";".join(
+                        str(round(s, 4)) for s in a_part_sims
+                    )
+                else:
+                    a_emb_out = round(a_part_sims[0], 4)
+                if len(g_parts) > 1:
+                    g_emb_out: str | float = ";".join(
+                        str(round(s, 4)) for s in g_part_sims
+                    )
+                else:
+                    g_emb_out = round(g_part_sims[0], 4)
 
                 if not is_compound:
                     a_id, _ = author_lookup[a_parts[0]]
@@ -806,19 +868,12 @@ class CyteOnto:
                         if a_id and g_id
                         else 0.0
                     )
-                    a_id_out = a_id or ""
-                    g_id_out = g_id or ""
                     method = self._method_for(a_id, g_id, hier)
                 else:
-                    # Hungarian match mean on an m x n score matrix S. Pick one-to-one
-                    # assignments that maximize total score, then average those k pairs.
-                    # When m != n, multiply by coverage = min(m,n) / max(m,n).
-                    #
-                    # 2x2 same compound (diagonal ~1, off-diagonal ~0):
-                    #   cytescore_similarity ~ 1.0
-                    #
-                    # 3x2 partial overlap (author AT2+plasma+NK, algo AT2+T cell):
-                    #   match_mean ~ 0.53, coverage 2/3, cytescore_similarity ~ 0.35
+                    # Build an m x n part score matrix S, then reduce by compound_scoring:
+                    # - max: highest entry in S
+                    # - hungarian_mean: one-to-one assignment mean; when m != n,
+                    #   multiply by coverage = min(m,n) / max(m,n)
                     score_matrix = np.zeros((m, n), dtype=np.float64)
                     for ai, ap in enumerate(a_parts):
                         a_id, _ = author_lookup[ap]
@@ -835,19 +890,11 @@ class CyteOnto:
                                 else 0.0
                             )
 
-                    hier, assignments = _hungarian_match_mean(score_matrix)
+                    if compound_scoring == "max":
+                        hier = float(score_matrix.max()) if score_matrix.size else 0.0
+                    else:
+                        hier, _ = _hungarian_match_mean(score_matrix)
                     method = "cytescore_compound"
-                    a_matched_ids: list[str] = []
-                    g_matched_ids: list[str] = []
-                    for ai, aj in assignments:
-                        a_id = author_lookup[a_parts[ai]][0]
-                        g_id = algo_lookup[g_parts[aj]][0]
-                        if a_id:
-                            a_matched_ids.append(a_id)
-                        if g_id:
-                            g_matched_ids.append(g_id)
-                    a_id_out = ";".join(dict.fromkeys(a_matched_ids))
-                    g_id_out = ";".join(dict.fromkeys(g_matched_ids))
 
                 rows.append(
                     {
@@ -857,13 +904,11 @@ class CyteOnto:
                         "author_label": a_lbl,
                         "algorithm_label": g_lbl,
                         "author_ontology_id": a_id_out,
-                        "author_ontology_name": self._ontology_names_for_ids(a_id_out),
-                        "author_embedding_similarity": round(a_sim_mean, 4),
+                        "author_ontology_name": a_name_out,
+                        "author_embedding_similarity": a_emb_out,
                         "algorithm_ontology_id": g_id_out,
-                        "algorithm_ontology_name": self._ontology_names_for_ids(
-                            g_id_out
-                        ),
-                        "algorithm_embedding_similarity": round(g_sim_mean, 4),
+                        "algorithm_ontology_name": g_name_out,
+                        "algorithm_embedding_similarity": g_emb_out,
                         "cytescore_similarity": round(hier, 4),
                         "similarity_method": method,
                     }
@@ -887,6 +932,7 @@ class CyteOnto:
         metric: str = "cosine_kernel",
         metric_params: dict[str, Any] | None = None,
         use_cache: bool = True,
+        compound_scoring: Literal["max", "hungarian_mean"] = "max",
     ) -> pd.DataFrame:
         """Pull algorithm labels out of ``adata.obs`` and delegate to ``compare``.
 
@@ -896,6 +942,10 @@ class CyteOnto:
         names = algorithm_names or list(target_columns)
         if len(names) != len(target_columns):
             raise ValueError("algorithm_names length must match target_columns length")
+
+        author_labels = [
+            lbl.lower() if not _is_empty(lbl) else lbl for lbl in author_labels
+        ]
 
         collected: list[tuple[str, list[str]]] = []
         for adata in anndata_objects:
@@ -908,7 +958,16 @@ class CyteOnto:
                 if col not in adata.obs:
                     logger.warning(f"Column '{col}' missing from AnnData; skipping")
                     continue
-                collected.append((name, adata.obs[col].astype(str).tolist()))
+                algo_labels = adata.obs[col].astype(str).tolist()
+                collected.append(
+                    (
+                        name,
+                        [
+                            lbl.lower() if not _is_empty(lbl) else lbl
+                            for lbl in algo_labels
+                        ],
+                    )
+                )
 
         return await self.compare(
             author_labels=author_labels,
@@ -917,6 +976,7 @@ class CyteOnto:
             metric=metric,
             metric_params=metric_params,
             use_cache=use_cache,
+            compound_scoring=compound_scoring,
         )
 
     # cache utilities
