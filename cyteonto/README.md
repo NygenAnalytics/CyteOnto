@@ -8,7 +8,7 @@ Given two parallel lists of cell type labels (one from the study author, one fro
 2. Generates a structured description for each label or part using an LLM.
 3. Embeds those descriptions with a configured embedding model.
 4. Matches each embedding to the closest CL term via cosine similarity.
-5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: kernelised cosine on the CL term embeddings). Compound pairs use Hungarian match mean with a coverage penalty when part counts differ.
+5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: kernelised cosine on the CL term embeddings). Compound pairs default to the maximum entry in the part-by-part score matrix (`compound_scoring="max"`); set `compound_scoring="hungarian_mean"` for Hungarian assignment mean with a coverage penalty when part counts differ.
 6. Returns a tidy `pandas.DataFrame` with per-pair scores.
 
 All LLM descriptions and embeddings are persisted on disk and reused across runs.
@@ -98,6 +98,7 @@ df = await cyto.compare(
     },
     run_id="sample_run_001",         # optional; auto-generated UUID if omitted
     metric="cosine_kernel",
+    compound_scoring="max",            # default; use "hungarian_mean" for assignment mean
 )
 print(df)
 print("run_id used:", df["run_id"].iloc[0])
@@ -122,15 +123,15 @@ One row per `(algorithm, pair_index)`:
 | `run_id`                          | str         | The `run_id` passed to `compare`.                                            |
 | `algorithm`                       | str         | Algorithm key from the `algorithms` mapping.                                 |
 | `pair_index`                      | int         | Position inside the label list, starting at 0.                               |
-| `author_label`                    | str         | The author label for this pair.                                              |
-| `algorithm_label`                 | str         | The algorithm label for this pair.                                           |
-| `author_ontology_id`              | str         | Best CL match for the author label. For compound pairs, semicolon-separated ids from the Hungarian assignment only. Empty string if unmatched. |
+| `author_label`                    | str         | The author label for this pair (lowercased at compare entry).                |
+| `algorithm_label`                 | str         | The algorithm label for this pair (lowercased at compare entry).             |
+| `author_ontology_id`              | str         | Best CL match per author part, semicolon-separated in part order. Empty string if unmatched. |
 | `author_ontology_name`            | str         | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
-| `author_embedding_similarity`     | float       | Mean cosine similarity between author part embeddings and their CL matches. |
-| `algorithm_ontology_id`           | str         | Best CL match for the algorithm label. Same compound rules as author. |
+| `author_embedding_similarity`     | float \| str | Cosine similarity of each author part to its CL match. Single float when one part; semicolon-separated floats when multiple parts. |
+| `algorithm_ontology_id`           | str         | Best CL match per algorithm part, same rules as author. |
 | `algorithm_ontology_name`         | str         | Names for ids in `algorithm_ontology_id`. |
-| `algorithm_embedding_similarity`  | float       | Mean cosine similarity between algorithm part embeddings and their CL matches. |
-| `cytescore_similarity`            | float       | Score under the chosen `metric`; `0.0` if either side is unmatched. |
+| `algorithm_embedding_similarity`  | float \| str | Same shape as author embedding similarity, for algorithm parts. |
+| `cytescore_similarity`            | float       | Score under the chosen `metric` / compound reducer; `0.0` if either side is unmatched. |
 | `similarity_method`               | str         | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
 
 ---
@@ -145,7 +146,7 @@ Read once on import, via `python-dotenv`:
 |-----------------------------|-----------------------------------------------------------|---------|
 | `EMBEDDING_MODEL_API_KEY`   | Fallback `apiKey` when `EmbdConfig.apiKey` is `None`.     | `""`    |
 | `NCBI_API_KEY`              | Optional. Raises PubMed rate limits for the agent tool.   | `""`    |
-| `CYTEONTO_LOG_LEVEL`        | Loguru log level (`DEBUG`, `INFO`, `WARNING`, ...).       | `INFO`  |
+| `CYTEONTO_LOG_LEVEL`        | Loguru log level (`DEBUG`, `INFO`, `WARNING`, ...).       | `DEBUG` |
 | `CYTEONTO_LOG_FILE`         | Optional log file path with 10 MB rotation.               | unset   |
 
 The LLM agent keys follow whatever the caller passes to `pydantic_ai`; this package does not manage them.
@@ -238,7 +239,7 @@ cyto = await CyteOnto.from_config(
 
 Additional behavior on top of `__init__`:
 
-1. Checks that `cell_ontology/cell_to_cell_ontology.csv` and `cell_ontology/cl.owl` exist.
+1. Checks that `cell_ontology/cell_to_cell_ontology.csv` (and preferably the enriched CSV) and `cell_ontology/cl.owl` exist. Lookups prefer `cell_to_cell_ontology_enriched.csv` when present.
 2. Computes ontology paths from `llm.to_artifact_key()` and `embedding.to_artifact_key()`.
 3. If `force_regenerate=True`, unlinks both the ontology embeddings NPZ and the descriptions JSON before proceeding.
 4. Loads the descriptions JSON (if present) and drops any blank entries so they can be retried.
@@ -259,6 +260,7 @@ df = await cyto.compare(
     metric_params: dict[str, Any] | None = None,
     min_match_similarity: float = 0.1,
     use_cache: bool = True,
+    compound_scoring: Literal["max", "hungarian_mean"] = "max",
 )
 ```
 
@@ -268,33 +270,35 @@ Constraints:
 
 - Every value in `algorithms` must be the same length as `author_labels`. Mismatched lengths raise `ValueError`.
 - Algorithm names must be unique. `"author"` is reserved and rejected.
+- `compound_scoring` must be `"max"` or `"hungarian_mean"`; any other value raises `ValueError`.
+- Non-empty author and algorithm labels (and decomposed parts) are lowercased before decompose/describe/embed so casing does not split caches.
 - `run_id` is used as a cache namespace on disk. Reusing the same id reuses cached author and algorithm embeddings when the labels match. If you pass `None`, a UUID of the form `run-<uuid4>` is generated and logged; the same value is written into every result row so you can recover it later.
 
 Call flow:
 
-1. `_resolve_label_parts` decomposes unique labels via LLM (cached per `run_id` under `decompositions/`).
-2. `_embed_user_labels` on the union of sanitized parts per side (author, then each algorithm).
-3. `_match` returns the best CL id and similarity for each part.
-4. `_ensure_similarity()` lazy-loads the OWL file and the ontology embeddings into `OntologySimilarity`.
-5. For each aligned pair index:
+1. Lowercase non-empty labels on both sides.
+2. `_resolve_label_parts` decomposes unique labels via LLM (cached per `run_id` under `decompositions/`). Compound parts are lowercased.
+3. `_embed_user_labels` on the union of sanitized parts per side (author, then each algorithm).
+4. `_match` returns the best CL id and similarity for each part.
+5. `_ensure_similarity()` lazy-loads the OWL file and the ontology embeddings into `OntologySimilarity`.
+6. For each aligned pair index:
    - **Simple pair** (one part on each side): single `OntologySimilarity.similarity` call; `similarity_method` from `_method_for`.
-   - **Compound pair** (more than one part on either side): build an m×n score matrix, run Hungarian max-weight matching, average assigned scores; multiply by `min(m,n)/max(m,n)` when `m ≠ n`; `similarity_method = cytescore_compound`.
-6. Rows are concatenated into a DataFrame with columns from `RESULT_COLUMNS`.
+   - **Compound pair** (more than one part on either side): build an m×n score matrix `S`, then reduce with `compound_scoring` (see below); `similarity_method = cytescore_compound`.
+7. Rows are concatenated into a DataFrame with columns from `RESULT_COLUMNS`. Ontology ids/names and embedding similarities list **all** parts in order (not only Hungarian-matched pairs).
 
 ### Compound label scoring
 
 Mixture labels such as doublets or mixed populations are poor matches when embedded as a single string. `compare` therefore:
 
-1. Calls `decompose_labels` to split a label into one or more cell-type parts (semicolon-separated synonyms stay as one part).
+1. Calls `decompose_labels` to split a label into one or more cell-type parts (semicolon-separated synonyms stay as one part; compound part names are lowercased).
 2. Embeds and matches each unique part.
-3. Scores compound pairs with **Hungarian match mean**:
-   - Build matrix `S` where `S[i,j]` is the cytescore between author part `i` and algorithm part `j`.
-   - Pick `k = min(m,n)` one-to-one assignments that maximize total score.
-   - `match_mean` = mean of assigned cell scores.
-   - If `m ≠ n`, multiply by coverage `min(m,n) / max(m,n)`.
-4. Writes `similarity_method = cytescore_compound`. Ontology ids and names list only the matched assignment pairs (semicolon-separated when `k > 1`).
+3. Builds matrix `S` where `S[i,j]` is the cytescore between author part `i` and algorithm part `j`.
+4. Reduces `S` with `compound_scoring`:
+   - **`"max"` (default):** `cytescore_similarity = max(S)`.
+   - **`"hungarian_mean"`:** pick `k = min(m,n)` one-to-one assignments that maximize total score; take the mean of those `k` scores; if `m ≠ n`, multiply by coverage `min(m,n) / max(m,n)`.
+5. Writes `similarity_method = cytescore_compound`. Result ontology ids/names and per-part embedding similarities include every part on that side.
 
-Illustrative scores (see `notebooks/quick_tutorial.ipynb`):
+Illustrative scores with `compound_scoring="hungarian_mean"` (see `notebooks/quick_tutorial.ipynb`):
 
 | Scenario | m×n | Typical score |
 |----------|-----|---------------|
@@ -303,6 +307,8 @@ Illustrative scores (see `notebooks/quick_tutorial.ipynb`):
 | No shared types | 2×2 | ~0.07 |
 | Partial overlap, extra author type | 3×2 | ~0.35 |
 | Author doublet vs single type | 2×1 | best match × 0.5 |
+
+With the default `"max"`, the same matrices report the highest single cell of `S` instead (for example 2×1 with scores `[0.6, 0.2]` yields `0.6`).
 
 ### `compare_anndata` (async)
 
@@ -353,7 +359,7 @@ CyteOnto.compare
      ├─ _match(algo_part_emb)
      └─ for each pair_index:
          ├─ simple: OntologySimilarity.similarity(a_id, g_id, ...)
-         └─ compound: build S, _hungarian_match_mean(S) → cytescore_compound
+         └─ compound: build S; max(S) or _hungarian_match_mean(S) → cytescore_compound
 ```
 
 ---
@@ -418,7 +424,7 @@ Usage limits default to `request_limit=50, input_tokens_limit=60_000`. Override 
 
 ### Compound label decomposition
 
-`describe.decompose_label` and `describe.decompose_labels` call a dedicated LLM agent with `output_type=LabelDecomposition`. The model decides whether a label names multiple cell types (doublets, mixed populations) and returns sanitized parts. Semicolon-separated synonyms stay as one part. Results are cached per `run_id` under `user_files/decompositions/<run_id>/decompositions_<llmKey>.json`.
+`describe.decompose_label` and `describe.decompose_labels` call a dedicated LLM agent with `output_type=LabelDecomposition`. The model decides whether a label names multiple cell types (doublets, mixed populations) and returns sanitized parts in lowercase. Semicolon-separated synonyms stay as one part. Results are cached per `run_id` under `user_files/decompositions/<run_id>/decompositions_<llmKey>.json`.
 
 Tune description batching by editing the constants at the top of `describe.py` or by passing `second_pass_wait_seconds` explicitly; the other values are module-level for now.
 
@@ -448,7 +454,7 @@ Tune description batching by editing the constants at the top of `describe.py` o
 |----------------|-------------|-------|
 | `initialLabel` | `str`       | Input label, copied verbatim. |
 | `isCompound`   | `bool`      | `true` when the label names more than one cell type. |
-| `parts`        | `list[str]` | Sanitized cell-type parts. For non-compound labels, a single element equal to the label. |
+| `parts`        | `list[str]` | Sanitized cell-type parts (lowercased when compound). For non-compound labels, a single element equal to the label. |
 
 Used only for decomposition; descriptions are generated per part afterward.
 
@@ -541,8 +547,9 @@ Set via `PathConfig(data_dir=..., user_dir=...)`:
 ```
 <data_dir>/
 ├── cell_ontology/
-│   ├── cell_to_cell_ontology.csv      shipped
-│   └── cl.owl                         shipped
+│   ├── cell_to_cell_ontology.csv              shipped (original synonyms)
+│   ├── cell_to_cell_ontology_enriched.csv     shipped or built by setup.py
+│   └── cl.owl                                 shipped
 └── embedding/
     ├── cell_ontology/
     │   └── embeddings_<llmKey>_<embdKey>.npz
@@ -562,6 +569,10 @@ Set via `PathConfig(data_dir=..., user_dir=...)`:
     └── <run_id>/
         └── decompositions_<llmKey>.json
 ```
+
+`OntologyMapping` prefers the enriched CSV when it exists. That file keeps the original `label` column for display and adds `label_normalized` (lowercase) for lookup and ontology description inputs. Rows that share the same `(ontology_id, label_normalized)` after lowercasing are deduplicated (first kept).
+
+`uv run python cyteonto/setup.py` downloads the original CSV, OWL, primary ontology descriptions/embeddings (required), backup pair artifacts (optional; failures warn and continue), and the enriched CSV (optional; builds locally from the original if the CDN file is missing).
 
 Filename rules (`ModelArtifactKey.filename_segment`, `paths._clean_identifier`):
 
@@ -601,6 +612,7 @@ When `use_cache=False` is passed to `compare`, all cache lookups are skipped and
 - Ontology embedding generation failure: `from_config` raises `RuntimeError`.
 - User embedding generation failure: `compare` raises `RuntimeError` with the offending identifier.
 - Label length mismatch between author and algorithm lists: `compare` raises `ValueError`.
+- Invalid `compound_scoring`: `compare` raises `ValueError`.
 - Duplicate algorithm name or an algorithm named `"author"`: `compare` raises `ValueError`.
 - Ontology match below `min_match_similarity`: CL id stored as empty string, `similarity_method` becomes `partial_match` or `no_matches`.
 - Both labels empty on a pair: `similarity_method = empty`, ontology fields blank.
@@ -616,7 +628,7 @@ When `use_cache=False` is passed to `compare`, all cache lookups are skipped and
 - **New provider**: add a URL to `_PROVIDER_URL` in `embed.py`, extend the `EmbdProvider` `Literal` in `models.py`, and adjust `_headers` / `_build_payload` / `_extract_embedding` if the request or response shape differs.
 - **New similarity metric**: implement a helper in `OntologySimilarity`, add a branch in `OntologySimilarity.similarity`, and update the table above.
 - **Alternative prompt**: edit `describe._build_prompt`. The existing prompt lists every `CellDescription` field with a soft length cap and a neutral tone; keep the same structure to avoid anchoring bias.
-- **Different ontology file**: pass a custom `data_dir`. The package expects the two files under `<data_dir>/cell_ontology/` to be named exactly `cl.owl` and `cell_to_cell_ontology.csv`.
+- **Different ontology file**: pass a custom `data_dir`. The package expects `cl.owl` and `cell_to_cell_ontology.csv` under `<data_dir>/cell_ontology/`. Prefer also shipping or generating `cell_to_cell_ontology_enriched.csv` via `setup.py`.
 
 ---
 
@@ -626,7 +638,7 @@ Already declared in the project `pyproject.toml`:
 
 - `pydantic`, `pydantic-ai`
 - `aiohttp`, `tenacity`
-- `numpy`, `pandas`, `scikit-learn`
+- `numpy`, `pandas`, `scikit-learn` (Hungarian assignment uses `scipy.optimize`, pulled in transitively)
 - `owlready2`
 - `loguru`, `python-dotenv`, `tqdm`
 - `requests` (PubMed tool)

@@ -14,11 +14,12 @@ tests/
 ├── test_models.py         # Pydantic models (descriptions, configs, usage)
 ├── test_path_config.py    # PathConfig path resolution
 ├── test_artifact_keys.py  # Artifact keys, paths, storage round trips
-├── test_ontology.py       # OntologyMapping + OntologySimilarity
+├── test_ontology.py       # OntologyMapping + OntologySimilarity (incl. label_normalized)
+├── test_setup.py          # setup.py enriched CSV + optional backup downloads
 ├── test_embed.py          # Embedding HTTP helpers and orchestration
 ├── test_describe.py       # Prompt building and error formatting
 ├── test_pubmed.py         # PubMed abstract retrieval
-└── test_cyteonto.py       # Orchestrator units (decomposition, Hungarian compound scoring, compare)
+└── test_cyteonto.py       # Orchestrator units (decomposition, compound max/hungarian scoring, compare)
 ```
 
 ## Running
@@ -33,11 +34,14 @@ uv run pytest -v
 # Single test
 uv run pytest tests/test_models.py::TestCellDescription::test_to_sentence
 
-# Compound scoring and compare integration
+# Compound scoring and compare integration (max default + hungarian_mean)
 uv run pytest tests/test_cyteonto.py::TestHungarianMatchMean tests/test_cyteonto.py::TestCompareCompoundLabels -v
 
 # Label decomposition helpers (in test_cyteonto.py)
 uv run pytest tests/test_cyteonto.py -k "Decompos or decompose" -v
+
+# Setup enriched CSV / optional backup behavior
+uv run pytest tests/test_setup.py -v
 
 # Drop into debugger on failure
 uv run pytest --pdb

@@ -6,7 +6,7 @@
 2. Generates a structured description for every label (or part) with an LLM.
 3. Embeds those descriptions with a configured embedding model.
 4. Matches each embedding to the closest CL term.
-5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings). Compound pairs use Hungarian bipartite matching with an optional coverage penalty when part counts differ.
+5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings). Compound pairs default to the maximum entry in the part-by-part score matrix (`compound_scoring="max"`); set `compound_scoring="hungarian_mean"` for Hungarian assignment mean with a coverage penalty when part counts differ.
 6. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
  
 Updated ReadMe: [cyteonto/README.md](cyteonto/README.md). Process flow and file layout: [docs/WORKFLOW.md](docs/WORKFLOW.md), [docs/FILE_MANAGEMENT.md](docs/FILE_MANAGEMENT.md).

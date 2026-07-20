@@ -9,8 +9,9 @@ Default roots: `cyteonto/data/` for shipped and generated ontology data, `cyteon
 ```
 <data_dir>/
 ├── cell_ontology/
-│   ├── cl.owl                              # shipped
-│   └── cell_to_cell_ontology.csv           # shipped
+│   ├── cl.owl                                    # shipped
+│   ├── cell_to_cell_ontology.csv                 # shipped (original synonyms)
+│   └── cell_to_cell_ontology_enriched.csv        # shipped or built by setup.py
 └── embedding/
     ├── cell_ontology/
     │   └── embeddings_<text_model>_<embd_model>.npz
@@ -39,12 +40,15 @@ Default roots: `cyteonto/data/` for shipped and generated ontology data, `cyteon
 
 `<run_id>` and algorithm names are passed through `_clean_identifier` (e.g. `sample.run.001` becomes `sample_run_001`). Model names use `_clean_model` (slashes and colons become hyphens; case and dots are preserved).
 
+The enriched CSV keeps original `label` values for display and adds `label_normalized` (lowercase) for lookups. `OntologyMapping` prefers the enriched file when present. `setup.py` downloads it from the CDN when available, or builds it locally from the original CSV (deduplicating identical `(ontology_id, label_normalized)` rows).
+
 ## File naming
 
 ### Ontology (generated once per model configuration)
 
 | Artifact | Pattern | Example |
 |----------|---------|---------|
+| Enriched mapping | `cell_to_cell_ontology_enriched.csv` | columns: `ontology_id`, `label`, `label_normalized` |
 | Descriptions | `descriptions_<llmKey>.json` | `descriptions_together_moonshotai-Kimi-K2.6.json` |
 | Embeddings | `embeddings_<llmKey>_<embdKey>.npz` | `embeddings_together_moonshotai-Kimi-K2.6_openrouter_qwen-qwen3-embedding-8b.npz` |
 
@@ -74,7 +78,7 @@ cyto = await CyteOnto.from_config(
 )
 ```
 
-Custom `data_dir` must still contain `cell_ontology/cl.owl` and `cell_ontology/cell_to_cell_ontology.csv` with those exact filenames.
+Custom `data_dir` must still contain `cell_ontology/cl.owl` and `cell_ontology/cell_to_cell_ontology.csv` with those exact filenames. Prefer also providing `cell_to_cell_ontology_enriched.csv` (via `setup.py` or CDN).
 
 ## Caching behavior
 
@@ -88,7 +92,7 @@ Custom `data_dir` must still contain `cell_ontology/cl.owl` and `cell_ontology/c
 
 Blank LLM failures are not written to JSON; those labels are retried on the next call. Embeddings for those positions may still use the raw label text so array shape stays aligned.
 
-Per-label caching means adding one new label to a run does not re-describe existing labels.
+Per-label caching means adding one new label to a run does not re-describe existing labels. Compare lowercases non-empty labels before caching, so `"Plasma cell"` and `"plasma cell"` share the same describe/embed/decompose keys.
 
 Set `use_cache=False` on `compare` to bypass all of the above for that invocation.
 
