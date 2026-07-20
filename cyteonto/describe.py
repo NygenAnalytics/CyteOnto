@@ -131,59 +131,66 @@ def _build_prompt(label: str, use_pubmed: bool) -> str:
         if use_pubmed
         else "Do not call any tools."
     )
-    return dedent(
-        f"""
-        Task: produce a structured description of one cell type.
+    return (
+        dedent(
+            """
+            Task: produce a structured description of one cell type.
 
-        Input label:
-        {label}
+            Input label:
+            {label}
 
-        The input label may be a single name, an abbreviation, or multiple
-        synonyms separated by semicolons. Treat them as referring to the same
-        cell type. If the label is ambiguous, choose the most likely
-        interpretation in a standard mammalian reference context and commit
-        to it throughout the response.
+            The input label may be a single name, an abbreviation, or multiple
+            synonyms separated by semicolons. Treat them as referring to the same
+            cell type. If the label is ambiguous, choose the most likely
+            interpretation in a standard mammalian reference context and commit
+            to it throughout the response.
 
-        {tool_block}
+            {tool_block}
 
-        Fill every field below. Write each field in third person, factual,
-        present tense. Do not add text outside the structured object. Do not
-        repeat the label text verbatim inside the other fields unless it is
-        the only correct wording.
+            Fill every field below. Write each field in third person, factual,
+            present tense. Do not add text outside the structured object. Do not
+            repeat the label text verbatim inside the other fields unless it is
+            the only correct wording.
 
-        initialLabel
-            Copy the input label verbatim, including punctuation and
-            semicolons. Do not normalise case, expand abbreviations, or
-            strip synonyms.
+            initialLabel
+                Copy the input label verbatim, including punctuation and
+                semicolons. Do not normalise case, expand abbreviations, or
+                strip synonyms.
 
-        descriptiveName
-            One noun phrase, at most 12 words. A precise name that identifies
-            the cell type without relying on the initial label. Prefer lineage
-            and location when available (for example "tissue-resident alveolar
-            macrophage").
+            descriptiveName
+                One noun phrase, at most 12 words. A precise name that identifies
+                the cell type without relying on the initial label. Prefer lineage
+                and location when available (for example "tissue-resident alveolar
+                macrophage").
 
-        function
-            One to three sentences, at most 60 words total. State the primary
-            biological role of the cell. Mention key effector mechanisms only
-            when they are defining for this cell type.
+            function
+                One to three sentences, at most 60 words total. State the primary
+                biological role of the cell. Mention key effector mechanisms only
+                when they are defining for this cell type.
 
-        diseaseRelevance
-            One to three sentences, at most 60 words total. State conditions
-            in which this cell type is pathologically involved, depleted,
-            expanded, or is a therapeutic target. If the cell type has no
-            well-established disease relevance, write "Not established".
+            diseaseRelevance
+                One to three sentences, at most 60 words total. State conditions
+                in which this cell type is pathologically involved, depleted,
+                expanded, or is a therapeutic target. If the cell type has no
+                well-established disease relevance, write "Not established".
 
-        developmentalStage
-            One sentence, at most 30 words. State the lineage, progenitor, or
-            developmental window the cell belongs to. Use "Terminally
-            differentiated" when applicable. Use "Not established" when the
-            stage is unknown.
+            developmentalStage
+                One sentence, at most 30 words. State the lineage, progenitor, or
+                developmental window the cell belongs to. Use "Terminally
+                differentiated" when applicable. Use "Not established" when the
+                stage is unknown.
 
-        Do not include marker genes, tissue lists, species ranges, or
-        citations inside any field. Do not hedge with phrases such as
-        "it is believed that" or "some studies suggest". State facts directly.
-        """
-    ).strip()
+            Do not include marker genes, tissue lists, species ranges, or
+            citations inside any field. Do not hedge with phrases such as
+            "it is believed that" or "some studies suggest". State facts directly.
+            """
+        )
+        .format(
+            label=label,
+            tool_block=tool_block,
+        )
+        .strip()
+    )
 
 
 def _build_descriptor_agent(
@@ -381,51 +388,56 @@ def _normalize_decomposition(
         return LabelDecomposition.single(label)
     if not output.isCompound:
         return LabelDecomposition.single(label)
-    cleaned = [p.strip() for p in output.parts if p and p.strip()]
+    cleaned = [p.strip().lower() for p in output.parts if p and p.strip()]
     if len(cleaned) < 2:
         return LabelDecomposition.single(label)
     return LabelDecomposition(initialLabel=label, isCompound=True, parts=cleaned)
 
 
 def _build_decompose_prompt(label: str) -> str:
-    return dedent(
-        f"""
-        Task: decide whether a cell-type annotation label refers to one cell
-        type or multiple distinct cell types.
+    return (
+        dedent(
+            """
+            Task: decide whether a cell-type annotation label refers to one cell
+            type or multiple distinct cell types.
 
-        Input label:
-        {label}
+            Input label:
+            {label}
 
-        Context: labels come from single-cell RNA-seq cluster annotations.
-        Some labels name a single cell type; others name a mixture such as a
-        doublet or mixed population.
+            Context: labels come from single-cell RNA-seq cluster annotations.
+            Some labels name a single cell type; others name a mixture such as a
+            doublet or mixed population.
 
-        Rules:
-        - Semicolon-separated text lists synonyms for one cell type. Do not
-          split those.
-        - Commas and hyphens inside a single cell-type name do not indicate
-          multiple types.
-        - When the label names multiple distinct cell types, set isCompound to
-          true and list each type in parts as a short sanitized name suitable
-          for ontology lookup. Remove mixture qualifiers such as "doublet",
-          "mixed population", or "contamination" from part names.
-        - When the label names one cell type, set isCompound to false and set
-          parts to a list containing only the original label verbatim.
+            Rules:
+            - Semicolon-separated text lists synonyms for one cell type. Do not
+            split those.
+            - Commas and hyphens inside a single cell-type name do not indicate
+            multiple types.
+            - When the label names multiple distinct cell types, set isCompound to
+            true and list each type in parts as a short sanitized name suitable
+            for ontology lookup. Remove mixture qualifiers such as "doublet",
+            "mixed population", or "contamination" from part names.
+            - When isCompound is true, return every part name in lowercase.
+            - When the label names one cell type, set isCompound to false and set
+            parts to a list containing only the original label verbatim.
 
-        initialLabel
-            Copy the input label exactly as given.
+            initialLabel
+                Copy the input label exactly as given.
 
-        isCompound
-            true when the label names multiple distinct cell types; false
-            otherwise.
+            isCompound
+                true when the label names multiple distinct cell types; false
+                otherwise.
 
-        parts
-            When isCompound is false, must contain exactly one element equal
-            to initialLabel.
-            When isCompound is true, must contain two or more sanitized
-            cell-type names.
+            parts
+                When isCompound is false, must contain exactly one element equal
+                to initialLabel.
+                When isCompound is true, must contain two or more sanitized
+                cell-type names.
         """
-    ).strip()
+        )
+        .format(label=label)
+        .strip()
+    )
 
 
 def _build_decompose_agent(base_agent: Agent, reasoning: bool = False) -> Agent:

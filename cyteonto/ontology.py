@@ -26,12 +26,39 @@ class OntologyMapping:
             return True
         try:
             df = pd.read_csv(self.csv_path)
+            if "label_normalized" not in df.columns:
+                df["label_normalized"] = df["label"].astype(str).str.lower()
+            else:
+                df["label_normalized"] = df["label_normalized"].astype(str).str.lower()
+            dup_mask = df.duplicated(
+                subset=["ontology_id", "label_normalized"], keep=False
+            )
+            if dup_mask.any():
+                for (oid, norm), grp in df[dup_mask].groupby(
+                    ["ontology_id", "label_normalized"]
+                ):
+                    originals = grp["label"].astype(str).tolist()
+                    logger.warning(
+                        f"Normalized label collision for {oid} {norm!r}: "
+                        f"original labels {originals}; keeping {originals[0]!r}"
+                    )
+            before = len(df)
+            df = df.drop_duplicates(
+                subset=["ontology_id", "label_normalized"], keep="first"
+            )
+            dropped = before - len(df)
+            if dropped:
+                logger.info(
+                    f"Dropped {dropped} duplicate ontology rows "
+                    "(same ontology_id and label_normalized)"
+                )
             self._df = df
             for _, row in df.iterrows():
-                label = str(row["label"])
+                norm = str(row["label_normalized"])
+                original = str(row["label"])
                 oid = str(row["ontology_id"])
-                self._id_to_labels.setdefault(oid, []).append(label)
-                self._label_to_id.setdefault(label, oid)
+                self._id_to_labels.setdefault(oid, []).append(original)
+                self._label_to_id.setdefault(norm, oid)
             self._loaded = True
             logger.info(f"Loaded {len(df)} ontology mappings from {self.csv_path}")
             return True
@@ -49,7 +76,7 @@ class OntologyMapping:
     def label_to_id(self, label: str) -> str | None:
         if not self._loaded:
             self.load()
-        return self._label_to_id.get(label)
+        return self._label_to_id.get(label.lower())
 
     def labels_for_id(self, ontology_id: str) -> list[str]:
         if not self._loaded:
@@ -61,8 +88,12 @@ class OntologyMapping:
         if not self._loaded:
             self.load()
         assert self._df is not None
-        grouped = self._df.groupby("ontology_id")["label"].apply(";".join).reset_index()
-        return grouped["ontology_id"].tolist(), grouped["label"].tolist()
+        grouped = (
+            self._df.groupby("ontology_id")["label_normalized"]
+            .apply(lambda s: ";".join(dict.fromkeys(s.astype(str))))
+            .reset_index()
+        )
+        return grouped["ontology_id"].tolist(), grouped["label_normalized"].tolist()
 
 
 class OntologySimilarity:

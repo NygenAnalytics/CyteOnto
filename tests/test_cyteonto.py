@@ -271,7 +271,18 @@ class TestNormalizeDecomposition:
             LabelDecomposition(initialLabel="A/B", isCompound=True, parts=["A", " B "]),
         )
         assert out.isCompound is True
-        assert out.parts == ["A", "B"]
+        assert out.parts == ["a", "b"]
+
+    def test_compound_lowercases_parts(self):
+        out = _normalize_decomposition(
+            "a/b",
+            LabelDecomposition(
+                initialLabel="a/b",
+                isCompound=True,
+                parts=["AT2 cell", "Plasma cell"],
+            ),
+        )
+        assert out.parts == ["at2 cell", "plasma cell"]
 
 
 class TestDecomposeLabels:
@@ -301,7 +312,7 @@ class TestDecomposeLabels:
                 mock_base_agent, "AT2 cell–plasma cell doublet"
             )
         assert dec.isCompound is True
-        assert dec.parts == ["AT2 cell", "plasma cell"]
+        assert dec.parts == ["at2 cell", "plasma cell"]
         assert usage.requests == 1
 
     @pytest.mark.asyncio
@@ -430,8 +441,51 @@ class TestCompareCompoundLabels:
         _mock_mapping_for_compare(inst)
         inst._resolve_label_parts = AsyncMock(
             side_effect=[
-                {"A1/A2": ["A1", "A2"]},
-                {"G1": ["G1"]},
+                {"a1/a2": ["a1", "a2"]},
+                {"g1": ["g1"]},
+            ]
+        )
+        inst._embed_user_labels = AsyncMock(
+            return_value=np.zeros((3, 2), dtype=np.float32)
+        )
+        inst._match = Mock(
+            return_value=[
+                ("CL:0000001", 0.9),
+                ("CL:0000002", 0.8),
+                ("CL:0000003", 0.7),
+            ]
+        )
+        sim = Mock()
+        sim.similarity.side_effect = [0.6, 0.2]
+        inst._ensure_similarity = Mock(return_value=sim)
+
+        df = await inst.compare(
+            author_labels=["A1/A2"],
+            algorithms={"algo0": ["G1"]},
+            run_id="run-test",
+            compound_scoring="hungarian_mean",
+        )
+
+        row = df.iloc[0]
+        assert row["author_label"] == "a1/a2"
+        assert row["algorithm_label"] == "g1"
+        assert row["cytescore_similarity"] == 0.3
+        assert row["similarity_method"] == "cytescore_compound"
+        assert row["author_ontology_id"] == "CL:0000001;CL:0000002"
+        assert row["algorithm_ontology_id"] == "CL:0000001"
+        assert row["author_ontology_name"] == "T cell;NK cell"
+        assert row["author_embedding_similarity"] == "0.9;0.8"
+        assert row["algorithm_embedding_similarity"] == 0.9
+        assert sim.similarity.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_max_2x1_default(self):
+        inst = object.__new__(CyteOnto)
+        _mock_mapping_for_compare(inst)
+        inst._resolve_label_parts = AsyncMock(
+            side_effect=[
+                {"a1/a2": ["a1", "a2"]},
+                {"g1": ["g1"]},
             ]
         )
         inst._embed_user_labels = AsyncMock(
@@ -455,14 +509,21 @@ class TestCompareCompoundLabels:
         )
 
         row = df.iloc[0]
-        assert row["author_label"] == "A1/A2"
-        assert row["algorithm_label"] == "G1"
-        assert row["cytescore_similarity"] == 0.3
+        assert row["cytescore_similarity"] == 0.6
         assert row["similarity_method"] == "cytescore_compound"
-        assert row["author_ontology_id"] == "CL:0000001"
-        assert row["algorithm_ontology_id"] == "CL:0000001"
-        assert row["author_ontology_name"] == "T cell"
-        assert sim.similarity.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_invalid_compound_scoring_raises(self):
+        inst = object.__new__(CyteOnto)
+        _mock_mapping_for_compare(inst)
+
+        with pytest.raises(ValueError, match="compound_scoring"):
+            await inst.compare(
+                author_labels=["T cell"],
+                algorithms={"algo0": ["B cell"]},
+                run_id="run-test",
+                compound_scoring="mean",  # type: ignore[arg-type]
+            )
 
     @pytest.mark.asyncio
     async def test_hungarian_2x2_same_compound(self):
@@ -470,8 +531,8 @@ class TestCompareCompoundLabels:
         _mock_mapping_for_compare(inst)
         inst._resolve_label_parts = AsyncMock(
             side_effect=[
-                {"A/B": ["A", "B"]},
-                {"A/B": ["A", "B"]},
+                {"a/b": ["a", "b"]},
+                {"a/b": ["a", "b"]},
             ]
         )
         inst._embed_user_labels = AsyncMock(
@@ -491,6 +552,7 @@ class TestCompareCompoundLabels:
             author_labels=["A/B"],
             algorithms={"algo0": ["A/B"]},
             run_id="run-test",
+            compound_scoring="hungarian_mean",
         )
 
         row = df.iloc[0]
@@ -498,6 +560,8 @@ class TestCompareCompoundLabels:
         assert row["similarity_method"] == "cytescore_compound"
         assert row["author_ontology_id"] == "CL:0000001;CL:0000002"
         assert row["algorithm_ontology_id"] == "CL:0000001;CL:0000002"
+        assert row["author_embedding_similarity"] == "0.9;0.8"
+        assert row["algorithm_embedding_similarity"] == "0.85;0.75"
         assert row["pair_index"] == 0
 
     @pytest.mark.asyncio
@@ -505,17 +569,17 @@ class TestCompareCompoundLabels:
         """Repeated author strings must keep distinct pair_index values."""
         inst = object.__new__(CyteOnto)
         _mock_mapping_for_compare(inst)
-        doublet = "AT2 cell-plasma cell doublet"
+        doublet = "at2 cell-plasma cell doublet"
         inst._resolve_label_parts = AsyncMock(
             side_effect=[
                 {
-                    doublet: ["AT2 cell", "plasma cell"],
-                    "T cell": ["T cell"],
+                    doublet: ["at2 cell", "plasma cell"],
+                    "t cell": ["t cell"],
                 },
                 {
-                    "Plasma cell": ["Plasma cell"],
-                    "AT2 cell / Plasma cell": ["AT2 cell", "Plasma cell"],
-                    "T cell": ["T cell"],
+                    "plasma cell": ["plasma cell"],
+                    "at2 cell / plasma cell": ["at2 cell", "plasma cell"],
+                    "t cell": ["t cell"],
                 },
             ]
         )
@@ -543,9 +607,9 @@ class TestCompareCompoundLabels:
 
         assert df["pair_index"].tolist() == [0, 1, 2]
         assert df["algorithm_label"].tolist() == [
-            "Plasma cell",
-            "AT2 cell / Plasma cell",
-            "T cell",
+            "plasma cell",
+            "at2 cell / plasma cell",
+            "t cell",
         ]
 
     @pytest.mark.asyncio
@@ -554,8 +618,8 @@ class TestCompareCompoundLabels:
         _mock_mapping_for_compare(inst)
         inst._resolve_label_parts = AsyncMock(
             side_effect=[
-                {"T cell": ["T cell"]},
-                {"B cell": ["B cell"]},
+                {"t cell": ["t cell"]},
+                {"b cell": ["b cell"]},
             ]
         )
         inst._embed_user_labels = AsyncMock(
