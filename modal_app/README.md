@@ -131,7 +131,7 @@ uv run modal run -m modal_app --env cytetrainer setup
 uv run modal run -m modal_app --env cytetrainer setup --force
 ```
 
-`setup` downloads the CL CSV, the OWL file, and the precomputed Kimi-K2.6 descriptions and qwen3-embedding-8b embeddings into the `cyteonto` Modal volume. It is idempotent; `--force` overwrites existing files.
+`setup` downloads the CL CSV, the OWL file, the enriched CL CSV (or builds it locally if missing from the CDN), and the precomputed primary-pair descriptions and embeddings into the `cyteonto` Modal volume. Backup-pair artifacts are optional: if those downloads fail, setup continues with the primary pair only. It is idempotent; `--force` overwrites existing files.
 
 ## Custom domain
 
@@ -196,6 +196,7 @@ Request body:
 | `metric` | `str` | no | `cosine_kernel` | See the `cyteonto` README for the full list. |
 | `metricParams` | `dict \| null` | no | `null` | Metric-specific parameters (for example `{"width": 0.25}` for `cosine_kernel`). |
 | `minMatchSimilarity` | `float in [0, 1]` | no | `0.1` | Threshold below which a label is considered unmatched to any CL term. |
+| `compoundScoring` | `max \| hungarian_mean` | no | `max` | How to reduce the m×n part score matrix for compound pairs. `max` takes the highest entry; `hungarian_mean` uses Hungarian assignment mean with a coverage penalty when part counts differ. |
 | `useCache` | `bool` | no | `true` | If `false`, all on-disk caches are bypassed for this run. |
 
 Response:
@@ -244,15 +245,15 @@ Returns `404` if the `runId` is unknown and `409` if the run is not in state `co
 | `run_id` | `str` | Echoed from the request. |
 | `algorithm` | `str` | Key from the `algorithms` map. |
 | `pair_index` | `int` | Position in the label list, starting at 0. |
-| `author_label` | `str` | Author label for this pair. |
-| `algorithm_label` | `str` | Algorithm label for this pair. |
-| `author_ontology_id` | `str` | Best CL match for the author label. Semicolon-separated for compound pairs (matched assignment only). Empty string if unmatched. |
+| `author_label` | `str` | Author label for this pair (lowercased at compare entry). |
+| `algorithm_label` | `str` | Algorithm label for this pair (lowercased at compare entry). |
+| `author_ontology_id` | `str` | Best CL match per author part, semicolon-separated in part order. Empty string if unmatched. |
 | `author_ontology_name` | `str` | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
-| `author_embedding_similarity` | `float` | Mean cosine similarity of author parts to their CL matches. |
-| `algorithm_ontology_id` | `str` | Best CL match for the algorithm label. Same compound rules as author. |
+| `author_embedding_similarity` | `float \| str` | Per-part cosine similarity to the matched CL term. Single float when one part; semicolon-separated floats when multiple parts. |
+| `algorithm_ontology_id` | `str` | Best CL match per algorithm part, same rules as author. |
 | `algorithm_ontology_name` | `str` | Names for ids in `algorithm_ontology_id`. |
-| `algorithm_embedding_similarity` | `float` | Mean cosine similarity of algorithm parts to their CL matches. |
-| `cytescore_similarity` | `float` | Score under the chosen `metric`; `0.0` when scoring does not apply. |
+| `algorithm_embedding_similarity` | `float \| str` | Same shape as author embedding similarity, for algorithm parts. |
+| `cytescore_similarity` | `float` | Score under the chosen `metric` / `compoundScoring` reducer; `0.0` when scoring does not apply. |
 | `similarity_method` | `str` | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
 
 ### GET `/health`
@@ -345,6 +346,7 @@ jq -n \
     metric: "cosine_kernel",
     metricParams: { center: 1.0, width: 0.25, amplitude: 1.0 },
     minMatchSimilarity: 0.15,
+    compoundScoring: "max",
     useCache: true
   }' \
 | curl -sS -X POST "$CYTEONTO_URL/compare" \
@@ -418,6 +420,7 @@ Mounted at `/cyteonto_data` inside every container:
 /cyteonto_data/
 ├── cell_ontology/
 │   ├── cell_to_cell_ontology.csv
+│   ├── cell_to_cell_ontology_enriched.csv
 │   └── cl.owl
 ├── embedding/
 │   ├── cell_ontology/
@@ -442,7 +445,7 @@ Mounted at `/cyteonto_data` inside every container:
             └── decompositions_<llmKey>.json
 ```
 
-`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one.
+`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one. The enriched CSV adds `label_normalized` for case-insensitive ontology lookups while preserving original synonym casing for display names.
 
 You can inspect the volume directly:
 
