@@ -1,7 +1,7 @@
 """Modal entry point for the CyteOnto API.
 
 Deploy (Nygen only):
-    modal deploy -m modal_app  --env cytetrainer
+    modal deploy -m modal_app --env cytetrainer
 """
 
 import sys

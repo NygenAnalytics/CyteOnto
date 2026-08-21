@@ -12,6 +12,7 @@ from pydantic_ai import (
     UsageLimitExceeded,
 )
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 from tenacity import (
     RetryError,
@@ -200,7 +201,7 @@ def _build_descriptor_agent(
 
     When ``reasoning=False`` we disable thinking for the underlying provider.
     """
-    model_settings: dict[str, Any] = {}
+    model_settings: ModelSettings = {}
     if not reasoning:
         provider = getattr(base_agent.model, "provider", None)
         base_url = getattr(provider, "base_url", None) if provider is not None else None
@@ -210,6 +211,7 @@ def _build_descriptor_agent(
         )
         if is_fireworks:
             model_settings = {
+                "temperature": 0.0,
                 "extra_body": {
                     "thinking": {"type": "disabled"},
                     "reasoning_effort": None,
@@ -217,6 +219,7 @@ def _build_descriptor_agent(
             }
         else:
             model_settings = {
+                "temperature": 0.0,
                 "thinking": False,
                 "extra_body": {
                     "chat_template_kwargs": {"thinking": False},  # for together-ai
@@ -441,7 +444,7 @@ def _build_decompose_prompt(label: str) -> str:
 
 
 def _build_decompose_agent(base_agent: Agent, reasoning: bool = False) -> Agent:
-    model_settings: dict[str, Any] = {}
+    model_settings: ModelSettings = {}
     if not reasoning:
         provider = getattr(base_agent.model, "provider", None)
         base_url = getattr(provider, "base_url", None) if provider is not None else None
@@ -451,6 +454,7 @@ def _build_decompose_agent(base_agent: Agent, reasoning: bool = False) -> Agent:
         )
         if is_fireworks:
             model_settings = {
+                "temperature": 0.0,
                 "extra_body": {
                     "thinking": {"type": "disabled"},
                     "reasoning_effort": None,
@@ -458,6 +462,7 @@ def _build_decompose_agent(base_agent: Agent, reasoning: bool = False) -> Agent:
             }
         else:
             model_settings = {
+                "temperature": 0.0,
                 "thinking": False,
                 "extra_body": {
                     "chat_template_kwargs": {"thinking": False},

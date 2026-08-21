@@ -5,19 +5,48 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi import Path as ApiPath
 from fastapi.responses import FileResponse, JSONResponse
 
+from cyteonto import __version__ as cyteonto_version
 from cyteonto.config import Config as CyteConfig
 
 from .config import AppConfig
-from .models import CompareRequest, CompareResponse, StatusResponse
+from .models import (
+    CompareRequest,
+    CompareResponse,
+    ErrorResponse,
+    HealthResponse,
+    ResultRow,
+    StatusResponse,
+)
 
 app_config = AppConfig()
 cyte_config = CyteConfig()
 _volume_lock = Lock()
+
+RunId = Annotated[
+    str,
+    ApiPath(description="Run identifier returned by POST /compare."),
+]
+ResultFormat = Annotated[
+    str,
+    Query(description="Response representation. Supported values are json and csv."),
+]
+
+_OPENAPI_TAGS = [
+    {
+        "name": "Service",
+        "description": "Service availability checks.",
+    },
+    {
+        "name": "Comparisons",
+        "description": "Submit comparison jobs, monitor progress, and fetch results.",
+    },
+]
 
 
 def _utc_now() -> str:
@@ -52,13 +81,49 @@ def _write_status(run_id: str, data: dict[str, Any], volume) -> None:
 
 def create_app(volume, run_compare_fn) -> FastAPI:
     """Build the FastAPI app bound to the given Modal volume and worker function."""
-    app = FastAPI(title="CyteOnto API", version="0.1.0")
+    app = FastAPI(
+        title="CyteOnto API",
+        summary="Compare cell type annotations with the Cell Ontology.",
+        description=(
+            "CyteOnto compares reference cell labels with labels from one or more "
+            "algorithms. Jobs run asynchronously: submit a comparison, poll its "
+            "status, then download the result as JSON or CSV."
+        ),
+        version=cyteonto_version,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+        openapi_tags=_OPENAPI_TAGS,
+    )
 
-    @app.get("/health")
-    def health() -> dict[str, bool]:
-        return {"ok": True}
+    @app.get(
+        "/health",
+        response_model=HealthResponse,
+        tags=["Service"],
+        summary="Check service health",
+        description="Return whether the API process is available.",
+        response_description="Current service availability.",
+    )
+    def health() -> HealthResponse:
+        return HealthResponse(ok=True)
 
-    @app.post("/compare", response_model=CompareResponse)
+    @app.post(
+        "/compare",
+        response_model=CompareResponse,
+        tags=["Comparisons"],
+        summary="Submit a comparison job",
+        description=(
+            "Queue an asynchronous comparison. Every algorithm must provide one "
+            "label for each entry in authorLabels."
+        ),
+        response_description="The queued job identifier and initial state.",
+        responses={
+            400: {
+                "model": ErrorResponse,
+                "description": "The request is inconsistent or lacks a required key.",
+            }
+        },
+    )
     def submit_compare(req: CompareRequest) -> CompareResponse:
         if not req.authorLabels:
             raise HTTPException(400, "authorLabels must be non-empty")
@@ -121,15 +186,66 @@ def create_app(volume, run_compare_fn) -> FastAPI:
         )
         return CompareResponse(runId=run_id, state="queued")
 
-    @app.get("/status/{run_id}", response_model=StatusResponse)
-    def get_status(run_id: str) -> StatusResponse:
+    @app.get(
+        "/status/{run_id}",
+        response_model=StatusResponse,
+        tags=["Comparisons"],
+        summary="Get comparison status",
+        description="Return the latest status recorded for a comparison job.",
+        response_description="The current job status.",
+        responses={
+            404: {
+                "model": ErrorResponse,
+                "description": "No job exists for the supplied run identifier.",
+            }
+        },
+    )
+    def get_status(run_id: RunId) -> StatusResponse:
         status = _read_status(run_id, volume)
         if status is None:
             raise HTTPException(404, f"run_id not found: {run_id}")
         return StatusResponse(**status)
 
-    @app.get("/result/{run_id}")
-    def get_result(run_id: str, format: str = "json"):
+    @app.get(
+        "/result/{run_id}",
+        response_model=list[ResultRow],
+        tags=["Comparisons"],
+        summary="Download comparison results",
+        description=(
+            "Return one row per algorithm and label pair for a completed job. JSON "
+            "is returned by default. Set format=csv to download a CSV file."
+        ),
+        responses={
+            200: {
+                "description": "Comparison rows represented as JSON or CSV.",
+                "content": {
+                    "text/csv": {
+                        "schema": {
+                            "type": "string",
+                            "format": "binary",
+                        }
+                    }
+                },
+            },
+            400: {
+                "model": ErrorResponse,
+                "description": "The requested result format is unsupported.",
+            },
+            404: {
+                "model": ErrorResponse,
+                "description": "No job exists for the supplied run identifier.",
+            },
+            409: {
+                "model": ErrorResponse,
+                "description": "The job has not completed successfully.",
+            },
+            500: {
+                "model": ErrorResponse,
+                "description": "The recorded result cannot be read.",
+            },
+        },
+    )
+    def get_result(run_id: RunId, format: ResultFormat = "json"):
         if format not in ("json", "csv"):
             raise HTTPException(400, "format must be 'json' or 'csv'")
 
