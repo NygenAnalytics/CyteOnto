@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi import Path as ApiPath
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from cyteonto import __version__ as cyteonto_version
 from cyteonto.config import Config as CyteConfig
@@ -47,6 +47,103 @@ _OPENAPI_TAGS = [
         "description": "Submit comparison jobs, monitor progress, and fetch results.",
     },
 ]
+
+_LANDING_PAGE = """\
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CyteOnto API</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400&display=swap"
+    rel="stylesheet"
+  >
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+      background: #ffffff;
+      color: #000000;
+      font-family: "Inter", sans-serif;
+      line-height: 1.2;
+    }
+    main {
+      width: min(58rem, 100%);
+    }
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: #b4b4b4;
+      font-size: 0.875rem;
+      font-weight: 400;
+      letter-spacing: -0.04em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      color: #000000;
+      font-size: clamp(3rem, 10vw, 6rem);
+      font-weight: 400;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+    .subheadline {
+      max-width: 42rem;
+      margin: 1rem 0 2.5rem;
+      color: #000000;
+      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-weight: 300;
+      letter-spacing: -0.04em;
+      line-height: 1.2;
+    }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    a {
+      padding: 0.75rem 1rem;
+      border-radius: 999px;
+      background: #0077fc;
+      color: #ffffff;
+      font-weight: 400;
+      letter-spacing: -0.04em;
+      text-decoration: none;
+    }
+    a + a {
+      background: #ffffff;
+      color: #0077fc;
+      box-shadow: inset 0 0 0 1px #0077fc;
+    }
+    a:hover { text-decoration: underline; }
+    a:focus-visible {
+      outline: 3px solid #000000;
+      outline-offset: 3px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">API service</p>
+    <h1>CyteOnto</h1>
+    <p class="subheadline">
+      Compare reference cell type annotations with labels produced by one or
+      more algorithms.
+    </p>
+    <nav aria-label="CyteOnto links">
+      <a href="/docs">View API documentation</a>
+      <a href="https://nygen.io/">Visit Nygen</a>
+    </nav>
+  </main>
+</body>
+</html>
+"""
 
 
 def _utc_now() -> str:
@@ -95,6 +192,10 @@ def create_app(volume, run_compare_fn) -> FastAPI:
         openapi_url="/openapi.json",
         openapi_tags=_OPENAPI_TAGS,
     )
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def landing_page() -> HTMLResponse:
+        return HTMLResponse(_LANDING_PAGE)
 
     @app.get(
         "/health",

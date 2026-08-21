@@ -19,6 +19,17 @@ def test_swagger_docs_are_public(client: TestClient):
     assert "/openapi.json" in response.text
 
 
+def test_landing_page_links_to_docs_and_nygen(client: TestClient):
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'href="/docs"' in response.text
+    assert 'href="https://nygen.io/"' in response.text
+    assert "family=Inter:wght@300;400" in response.text
+    assert "#0077fc" in response.text
+
+
 def test_openapi_schema_describes_the_http_contract(client: TestClient):
     response = client.get("/openapi.json")
 

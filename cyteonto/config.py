@@ -17,6 +17,7 @@ class Config:
     SCHEMA_VERSION: str = "3.0"
     PRIMARY_LLM_PROVIDER: str = "nebius"
     PRIMARY_LLM_MODEL: str = "moonshotai/Kimi-K2.6"
+    # Change to deepseek-v4-flash?
     PRIMARY_EMBEDDING_PROVIDER: str = "nebius"
     PRIMARY_EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
 
