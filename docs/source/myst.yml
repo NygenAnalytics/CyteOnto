@@ -1,0 +1,68 @@
+version: 1
+project:
+  title: CyteOnto
+  description: Compare cell type labels in Cell Ontology space with the hosted CyteOnto API
+    or the cyteonto Python package, and score how similar the author's and each
+    algorithm's cell types are.
+  github: https://github.com/NygenAnalytics/CyteOnto
+  plugins:
+  - type: executable
+    path: ../render_outputs.py
+  exclude:
+  - reference/api/**
+  static_files:
+  - llms.txt
+  - ../build/api
+  toc:
+  - file: index.md
+  - title: Getting started
+    children:
+    - file: getting-started/quickstart-api.md
+      title: Quickstart (hosted API)
+    - file: getting-started/installation.md
+      title: Installation
+    - file: getting-started/quickstart-python.md
+      title: Quickstart (Python)
+    - file: getting-started/how-cyteonto-works.md
+      title: How CyteOnto works
+  - title: Guides
+    children:
+    - file: guides/models-and-providers.md
+      title: Models and providers
+    - file: guides/compound-labels.md
+      title: Compound labels
+    - file: guides/similarity-metrics.md
+      title: Similarity metrics
+    - file: guides/caching.md
+      title: Caching and runs
+    - file: guides/anndata.md
+      title: Labels in AnnData
+    - file: guides/results.md
+      title: Read the results
+  - title: Reference
+    children:
+    - title: Python API
+      url: /api/index.html
+      open_in_same_tab: true
+    - file: reference/http-api.md
+      title: HTTP API
+    - file: reference/configuration.md
+      title: Environment and limits
+    - file: reference/files.md
+      title: Data files and formats
+  - title: Support
+    children:
+    - file: support/troubleshooting.md
+      title: Troubleshooting
+    - file: support/citing.md
+      title: Cite CyteOnto
+    - url: https://github.com/NygenAnalytics/CyteOnto/issues
+      title: Report an issue
+site:
+  template: book-theme
+  parts:
+    primary_sidebar_footer: <!-- No sidebar footer. -->
+  options:
+    folders: true
+    logo_text: CyteOnto
+    hide_authors: true

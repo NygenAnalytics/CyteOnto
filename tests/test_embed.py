@@ -66,6 +66,12 @@ class TestExtractEmbedding:
         assert _extract_embedding({"data": []}, cfg) == []
         assert _extract_embedding({}, cfg) == []
 
+    def test_ollama_embeddings(self):
+        cfg = EmbdConfig(provider="ollama", model="m")
+        result = {"model": "m", "embeddings": [[0.7, 0.8]]}
+        assert _extract_embedding(result, cfg) == [0.7, 0.8]
+        assert _extract_embedding({"embeddings": []}, cfg) == []
+
 
 class TestEmbedTexts:
     @pytest.mark.asyncio
@@ -82,8 +88,10 @@ class TestEmbedTexts:
 
     @pytest.mark.asyncio
     async def test_unsupported_provider_returns_none(self):
-        # 'fireworks' is a valid literal but has no embedding endpoint configured.
-        cfg = EmbdConfig(provider="fireworks", model="m", apiKey="k")
+        # Every valid literal has an endpoint, so build an unknown one unvalidated.
+        cfg = EmbdConfig.model_construct(
+            provider="unknown", model="m", apiKey="k", modelSettings=None
+        )
         assert await embed_texts(["x"], cfg) is None
 
     @pytest.mark.asyncio

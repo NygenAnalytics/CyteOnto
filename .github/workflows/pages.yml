@@ -1,0 +1,47 @@
+name: GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "docs/**"
+      - "cyteonto/**"
+      # The HTTP API reference is checked against the service's request schema.
+      - "modal_app/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "tests/test_docs_render.py"
+      - "tests/test_docs_structure.py"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/docs.yml
+    with:
+      ref: ${{ github.sha }}
+      pages: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: https://docs.nygen.io/CyteOnto/
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

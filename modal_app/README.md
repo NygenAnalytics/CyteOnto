@@ -1,73 +1,23 @@
 # Modal Service
 
-Modal deployment of the `cyteonto` package as an HTTP service.
+Modal deployment of the `cyteonto` package as an HTTP service, live at `https://cyteonto.nygen.io`.
 
-## Quickstart
-
-The service is live at:
-
-```
-https://cyteonto.nygen.io
-```
-
-API keys are optional when the default primary pair is used (`nebius` for LLM and embeddings). The worker also configures a fallback pair (`fireworks` / `openrouter`) and records which tiers were used on `GET /status/{run_id}` as `modelPairUsage`. Bring your own keys only when overriding providers.
-
-### Option A: Python client
-
-See [example.py](example.py). Edit the `CONFIG` block and run:
+To use the service, see the [hosted API quickstart](https://docs.nygen.io/CyteOnto/getting-started/quickstart-api/) and the [HTTP API reference](https://docs.nygen.io/CyteOnto/reference/http-api/), which lists every request field, the job status, the result formats and the errors. [example.py](example.py) submits a comparison, polls it and saves the result. Edit its `PAYLOAD`, optionally set `LLM_API_KEY` and `EMBEDDING_API_KEY` to send your own keys, and run:
 
 ```bash
 uv run python -m modal_app.example
 ```
 
-### Option B: curl
+This file covers the deployment.
 
-Send a compare request:
+## What this service provides
 
-```bash
-export CYTEONTO_URL="https://cyteonto.nygen.io"
-
-curl -sS -X POST "$CYTEONTO_URL/compare" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "authorLabels": ["alveolar macrophage", "regulatory T cell", "CD8-positive, alpha-beta T cell"],
-    "algorithms": {
-      "algo1": ["lung macrophage", "Treg", "CD8 T cell"],
-      "algo2": ["alveolar mac", "T regulatory cell", "cytotoxic T cell"]
-    }
-  }'
-```
-
-Response:
-
-```json
-{ "runId": "run-<uuid>", "state": "queued" }
-```
-
-Save the `runId` and poll status:
-
-```bash
-RUN_ID="run-<uuid>"
-curl -sS "$CYTEONTO_URL/status/$RUN_ID" | jq
-```
-
-Fetch the result once `state == "completed"`:
-
-```bash
-curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=json" | jq
-curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=csv" -o "$RUN_ID.csv"
-```
-
-For override patterns (your own keys, different provider, custom metric parameters), see the [example curl calls](#example-curl-calls) section below. The full request and response schema is in the [API reference](#api-reference).
-
-
-# What this service provides
-
-A Modal app named `cyteonto-api` that exposes three HTTP endpoints:
+A Modal app named `cyteonto-api` that exposes these HTTP endpoints:
 
 - `POST /compare` submits a compare job and returns a `runId` immediately.
 - `GET /status/{runId}` returns the current job state (`queued`, `running`, `completed`, `failed`).
 - `GET /result/{runId}` returns the saved DataFrame as CSV or JSON once the job is complete.
+- `GET /health` returns `{"ok": true}` as a liveness probe.
 
 Jobs run on a dedicated worker function (`run_compare`) scaled by Modal. Status and results are written to a Modal volume (`cyteonto`) so they survive restarts and are reachable from subsequent API calls.
 
@@ -92,13 +42,14 @@ https://modal.com/apps/nygen-labs/cytetrainer/deployed/cyteonto-api
 modal_app/
 ├── __init__.py        Public exports (app, functions, request/response models)
 ├── app.py             modal.App definition, image, volume, three functions
-├── api.py             FastAPI factory with /compare, /status, /result
+├── api.py             FastAPI factory with /compare, /status, /result, /health
 ├── config.py          AppConfig, timeouts, image builder, pyproject reader
+├── example.py         Python client: submit a comparison, poll it and save the result
 ├── models.py          Pydantic request/response models
 └── worker.py          Agent builder and the compare-job body
 ```
 
-All file-system paths live under `AppConfig` in `config.py`. Runtime constants (CPU, memory, timeouts, model defaults) live on the same class and can be edited without touching the rest of the package.
+All file-system paths live under `AppConfig` in `config.py`. Most runtime constants (CPU, memory, the worker timeout, model defaults) live on the same class and can be edited without touching the rest of the package.
 
 ## Deploy and prime the volume (For Nygen Labs Only)
 
@@ -126,9 +77,9 @@ Created objects.
 On first deploy (or when you want to refresh the shipped CL files and the precomputed ontology descriptions and embeddings), run the `setup` hook:
 
 ```bash
-uv run modal run -m modal_app --env cytetrainer setup
+uv run modal run --env cytetrainer -m modal_app::setup
 
-uv run modal run -m modal_app --env cytetrainer setup --force
+uv run modal run --env cytetrainer -m modal_app::setup --force
 ```
 
 `setup` downloads the CL CSV, the OWL file, the enriched CL CSV (or builds it locally if missing from the CDN), and the precomputed primary-pair descriptions and embeddings into the `cyteonto` Modal volume. Backup-pair artifacts are optional: if those downloads fail, setup continues with the primary pair only. It is idempotent; `--force` overwrites existing files.
@@ -139,277 +90,26 @@ The service is attached to `cyteonto.nygen.io` via Modal's custom domain feature
 
 The domain is already registered and verified in this workspace. `https://cyteonto.nygen.io` and the Modal-managed URL serve the same FastAPI app.
 
-## Hosted API keys (optional)
+## API keys
 
-The worker function is attached to a Modal secret named `cyteonto-secrets` with two keys:
+The worker function is attached to the Modal secret `cyteonto-secrets`. When a request omits `llmApiKey` or `embeddingApiKey`, the worker reads the key of the requested provider from the environment variable that `PROVIDER_API_KEY_ENV` in `cyteonto/config.py` names, such as `NEBIUS_API_KEY`; for embeddings, it then falls back to `EMBEDDING_MODEL_API_KEY`. A key in the request always takes precedence.
 
-| Env var | Covers |
-|---------|--------|
-| `TOGETHER_API_KEY` | `llmProvider="together"` |
-| `OPENROUTER_API_KEY` | `embeddingProvider="openrouter"` |
+| Env var | Used for |
+|---------|----------|
+| `NEBIUS_API_KEY` | The default LLM and embedding provider, `nebius` |
+| `FIREWORKS_API_KEY` | The fallback LLM, Kimi K2.6 on `fireworks` |
+| `OPENROUTER_API_KEY` | The fallback embedding model, Qwen3-Embedding-8B on `openrouter` |
 
-Callers can omit `llmApiKey` and/or `embeddingApiKey` from the request. The service falls back to the secret when the selected provider matches:
+A request for another provider without a key needs that provider's variable in the secret; otherwise the job fails with `RuntimeError: llmApiKey missing and no env var for llmProvider=...` (or the embedding equivalent). `POST /compare` cannot reject such requests early: it returns `400` only for providers without a variable in `PROVIDER_API_KEY_ENV`, and every provider of the request schema except `ollama`, which needs no key, has one.
 
-- Omit `llmApiKey` only if `llmProvider="together"`.
-- Omit `embeddingApiKey` only if `embeddingProvider="openrouter"` (or `"ollama"`, which needs no key).
-
-If the provider is not covered by the secret and no key is supplied, `POST /compare` returns `400` with a message pointing to the default provider. A user-supplied key always takes precedence over the hosted secret.
-
-To create or update the secret:
+To create the secret, or to replace it with `--force`:
 
 ```bash
 modal secret create cyteonto-secrets \
-  TOGETHER_API_KEY="tgp_v1_..." \
-  OPENROUTER_API_KEY="sk-or-..." \
+  NEBIUS_API_KEY="..." \
+  FIREWORKS_API_KEY="..." \
+  OPENROUTER_API_KEY="..." \
   --env cytetrainer
-```
-
-## API reference
-
-Base URL:
-
-```
-https://cyteonto.nygen.io
-```
-
-### POST `/compare`
-
-Submit a new compare job. Returns immediately with a `runId` and initial state `queued`.
-
-Request body:
-
-| Field | Type | Required | Default | Notes |
-|-------|------|----------|---------|-------|
-| `authorLabels` | `list[str]` | yes | | Reference labels, one per item. |
-| `algorithms` | `dict[str, list[str]]` | yes | | Map of algorithm name to that algorithm's labels. Each list must have the same length as `authorLabels`. Algorithm names must be unique. |
-| `llmProvider` | `openrouter \| together \| openai \| nebius \| fireworks` | no | `nebius` | OpenAI-compatible provider used for description generation. |
-| `llmModel` | `str` | no | `moonshotai/Kimi-K2.6` | Model name for the selected provider. |
-| `llmApiKey` | `str \| null` | no | `null` | If omitted, the hosted `TOGETHER_API_KEY` secret is used when `llmProvider="together"`. Required for any other provider. |
-| `embeddingProvider` | `deepinfra \| ollama \| openai \| google \| openrouter \| together \| nebius` | no | `nebius` | Embedding backend. |
-| `embeddingModel` | `str` | no | `qwen/qwen3-embedding-8b` | Embedding model name. |
-| `embeddingApiKey` | `str \| null` | no | `null` | If omitted, the hosted `OPENROUTER_API_KEY` secret is used when `embeddingProvider="openrouter"`. Required for any other provider except `ollama`. |
-| `embeddingModelSettings` | `dict \| null` | no | `null` | Merged into the embedding request body when `embeddingProvider=openrouter`. Pass `{}` to disable the default DeepInfra routing; pass your own `{"provider": {...}}` to customise. |
-| `embeddingMaxConcurrent` | `int >= 1` | no | `100` | Concurrency cap for embedding requests. |
-| `maxDescriptionConcurrency` | `int >= 1` | no | `100` | Concurrency cap for LLM description calls. |
-| `usePubmedTool` | `bool` | no | `false` | If `true`, the LLM can call a PubMed abstract tool while generating each description. |
-| `reasoning` | `bool` | no | `false` | Enable provider reasoning mode. Keep `false` for most use cases. |
-| `metric` | `str` | no | `cosine_kernel` | See the `cyteonto` README for the full list. |
-| `metricParams` | `dict \| null` | no | `null` | Metric-specific parameters (for example `{"width": 0.25}` for `cosine_kernel`). |
-| `minMatchSimilarity` | `float in [0, 1]` | no | `0.1` | Threshold below which a label is considered unmatched to any CL term. |
-| `compoundScoring` | `max \| hungarian_mean` | no | `max` | How to reduce the m×n part score matrix for compound pairs. `max` takes the highest entry; `hungarian_mean` uses Hungarian assignment mean with a coverage penalty when part counts differ. |
-| `useCache` | `bool` | no | `true` | If `false`, all on-disk caches are bypassed for this run. |
-
-Response:
-
-```json
-{ "runId": "run-<uuid>", "state": "queued" }
-```
-
-Validation errors return `400` with a JSON `detail` message (for example mismatched label lengths).
-
-### GET `/status/{runId}`
-
-Return the current status record.
-
-Response schema:
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `runId` | `str` | |
-| `state` | `queued \| running \| completed \| failed` | |
-| `createdAt` | ISO 8601 `str` | When the request was accepted. |
-| `startedAt` | ISO 8601 `str \| null` | When the worker started. |
-| `completedAt` | ISO 8601 `str \| null` | When the job reached a terminal state. |
-| `error` | `str \| null` | Populated when `state=failed`. `"<ExceptionClass>: <message>"`. |
-| `numAuthorLabels` | `int` | |
-| `numAlgorithms` | `int` | |
-| `numRows` | `int \| null` | Number of rows in the result DataFrame, when `state=completed`. |
-| `resultCsvPath` | `str \| null` | Volume-relative path to the CSV result. |
-| `resultJsonPath` | `str \| null` | Volume-relative path to the JSON result. |
-
-Returns `404` if the `runId` is unknown.
-
-### GET `/result/{runId}?format=json|csv`
-
-Return the saved DataFrame for a completed run. `format` defaults to `json`.
-
-- `format=json` returns `application/json` with one object per row.
-- `format=csv` returns `text/csv` as a downloadable file named `{runId}.csv`.
-
-Returns `404` if the `runId` is unknown and `409` if the run is not in state `completed`.
-
-### Result DataFrame columns
-
-| Column | Type | Meaning |
-|--------|------|---------|
-| `run_id` | `str` | Echoed from the request. |
-| `algorithm` | `str` | Key from the `algorithms` map. |
-| `pair_index` | `int` | Position in the label list, starting at 0. |
-| `author_label` | `str` | Author label for this pair (lowercased at compare entry). |
-| `algorithm_label` | `str` | Algorithm label for this pair (lowercased at compare entry). |
-| `author_ontology_id` | `str` | Best CL match per author part, semicolon-separated in part order. Empty string if unmatched. |
-| `author_ontology_name` | `str` | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
-| `author_embedding_similarity` | `float \| str` | Per-part cosine similarity to the matched CL term. Single float when one part; semicolon-separated floats when multiple parts. |
-| `algorithm_ontology_id` | `str` | Best CL match per algorithm part, same rules as author. |
-| `algorithm_ontology_name` | `str` | Names for ids in `algorithm_ontology_id`. |
-| `algorithm_embedding_similarity` | `float \| str` | Same shape as author embedding similarity, for algorithm parts. |
-| `cytescore_similarity` | `float` | Score under the chosen `metric` / `compoundScoring` reducer; `0.0` when scoring does not apply. |
-| `similarity_method` | `str` | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
-
-### GET `/health`
-
-Returns `{"ok": true}`. Useful as a liveness probe.
-
-## Example curl calls
-
-Set the base URL once:
-
-```bash
-export CYTEONTO_URL="https://cyteonto.nygen.io"
-```
-
-### Submit a compare job (hosted keys)
-
-When you use the default providers (`together` for LLM, `openrouter` for embeddings), the service uses the hosted `cyteonto-secrets` and you can omit both API keys:
-
-```bash
-curl -sS -X POST "$CYTEONTO_URL/compare" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "authorLabels": ["alveolar macrophage", "regulatory T cell", "CD8-positive, alpha-beta T cell"],
-    "algorithms": {
-      "algo1": ["lung macrophage", "Treg", "CD8 T cell"],
-      "algo2": ["alveolar mac", "T regulatory cell", "cytotoxic T cell"]
-    }
-  }'
-```
-
-### Submit a compare job (your own keys)
-
-To override the hosted keys, or to use a provider not covered by the secret, send `llmApiKey` and/or `embeddingApiKey` in the body. Build the JSON with `jq` so shell variables are interpolated safely:
-
-```bash
-export LLM_API_KEY="..."
-export EMBEDDING_MODEL_API_KEY="..."
-
-jq -n \
-  --arg llm_key "$LLM_API_KEY" \
-  --arg emb_key "$EMBEDDING_MODEL_API_KEY" \
-  '{
-    authorLabels: ["alveolar macrophage", "regulatory T cell", "CD8-positive, alpha-beta T cell"],
-    algorithms: {
-      algo1: ["lung macrophage", "Treg", "CD8 T cell"],
-      algo2: ["alveolar mac", "T regulatory cell", "cytotoxic T cell"]
-    },
-    llmApiKey: $llm_key,
-    embeddingApiKey: $emb_key
-  }' \
-| curl -sS -X POST "$CYTEONTO_URL/compare" \
-    -H 'Content-Type: application/json' \
-    -d @-
-```
-
-> Shell quoting note: bash does not expand `$VAR` inside single-quoted strings. Do not put `"$LLM_API_KEY"` inside `-d '{ ... }'`, the literal string `$LLM_API_KEY` will be sent. Use the `jq` pattern above or switch the body to double quotes with escaped inner quotes.
-
-Example response:
-
-```json
-{ "runId": "run-9b0f1c1e-1c4c-4f3f-a6ad-3fa1e4a5e8c3", "state": "queued" }
-```
-
-Save the id for polling:
-
-```bash
-RUN_ID="run-9b0f1c1e-1c4c-4f3f-a6ad-3fa1e4a5e8c3"
-```
-
-### Submit with explicit models and metric parameters
-
-```bash
-jq -n \
-  --arg llm_key "$LLM_API_KEY" \
-  --arg emb_key "$EMBEDDING_MODEL_API_KEY" \
-  '{
-    authorLabels: ["alveolar macrophage", "regulatory T cell"],
-    algorithms: { algo1: ["lung macrophage", "Treg"] },
-    llmProvider: "together",
-    llmModel: "moonshotai/Kimi-K2.6",
-    llmApiKey: $llm_key,
-    embeddingProvider: "openrouter",
-    embeddingModel: "qwen/qwen3-embedding-8b",
-    embeddingApiKey: $emb_key,
-    embeddingModelSettings: {
-      provider: { order: ["DeepInfra"], allow_fallbacks: true }
-    },
-    maxDescriptionConcurrency: 50,
-    embeddingMaxConcurrent: 50,
-    metric: "cosine_kernel",
-    metricParams: { center: 1.0, width: 0.25, amplitude: 1.0 },
-    minMatchSimilarity: 0.15,
-    compoundScoring: "max",
-    useCache: true
-  }' \
-| curl -sS -X POST "$CYTEONTO_URL/compare" \
-    -H 'Content-Type: application/json' \
-    -d @-
-```
-
-### Poll status
-
-```bash
-curl -sS "$CYTEONTO_URL/status/$RUN_ID" | jq
-```
-
-Example completed status:
-
-```json
-{
-  "runId": "run-9b0f1c1e-1c4c-4f3f-a6ad-3fa1e4a5e8c3",
-  "state": "completed",
-  "createdAt": "2026-04-22T22:11:04.501Z",
-  "startedAt": "2026-04-22T22:11:05.812Z",
-  "completedAt": "2026-04-22T22:12:48.133Z",
-  "error": null,
-  "numAuthorLabels": 3,
-  "numAlgorithms": 2,
-  "numRows": 6,
-  "resultCsvPath": "user_files/run-9b0f1c1e-1c4c-4f3f-a6ad-3fa1e4a5e8c3/result.csv",
-  "resultJsonPath": "user_files/run-9b0f1c1e-1c4c-4f3f-a6ad-3fa1e4a5e8c3/result.json"
-}
-```
-
-Example failed status:
-
-```json
-{
-  "runId": "run-...",
-  "state": "failed",
-  "error": "RuntimeError: Failed to embed labels for 'author'",
-  "completedAt": "2026-04-22T22:11:34.012Z"
-}
-```
-
-### Fetch the result
-
-As JSON:
-
-```bash
-curl -sS "$CYTEONTO_URL/result/$RUN_ID" | jq
-curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=json" | jq
-```
-
-As CSV:
-
-```bash
-curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=csv" -o "${RUN_ID}.csv"
-```
-
-If the run is still running or has failed, the endpoint returns `409` with a `detail` explaining the current state.
-
-### Health check
-
-```bash
-curl -sS "$CYTEONTO_URL/health"
 ```
 
 ## On-disk layout (Modal volume `cyteonto`)
@@ -426,7 +126,7 @@ Mounted at `/cyteonto_data` inside every container:
 │   ├── cell_ontology/
 │   │   └── embeddings_<llmKey>_<embdKey>.npz
 │   └── descriptions/
-│       └── descriptions_<text>.json
+│       └── descriptions_<llmKey>.json
 └── user_files/
     ├── <run_id>/
     │   ├── status.json
@@ -438,14 +138,14 @@ Mounted at `/cyteonto_data` inside every container:
     │       └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
     ├── descriptions/
     │   └── <run_id>/
-    │       ├── author/author_descriptions_<text>.json
-    │       └── algorithm/<algo_name>_descriptions_<text>.json
+    │       ├── author/author_descriptions_<llmKey>.json
+    │       └── algorithm/<algo_name>_descriptions_<llmKey>.json
     └── decompositions/
         └── <run_id>/
             └── decompositions_<llmKey>.json
 ```
 
-`<text>` is the cleaned LLM model name (for example `moonshotai-Kimi-K2.6`) and `<embd>` is the cleaned embedding model name. Descriptions and embeddings are cached per text and embedding model, so switching either model produces a fresh cache without invalidating the existing one. The enriched CSV adds `label_normalized` for case-insensitive ontology lookups while preserving original synonym casing for display names.
+`<llmKey>` and `<embdKey>` are the model keys of the LLM and the embedding model, such as `nebius_moonshotai-Kimi-K2.6` and `nebius_Qwen-Qwen3-Embedding-8B` (see [Data files and formats](https://docs.nygen.io/CyteOnto/reference/files/)). Descriptions and embeddings are cached per model, so switching either model produces a fresh cache without invalidating the existing one. The enriched CSV adds `label_normalized` for case-insensitive ontology lookups while preserving original synonym casing for display names.
 
 You can inspect the volume directly:
 
@@ -456,18 +156,18 @@ modal volume get cyteonto --env cytetrainer user_files/$RUN_ID/status.json ./sta
 
 ## Tuning
 
-All tunables live on `AppConfig` in `modal_app/config.py`:
+Most tunables live on `AppConfig` in `modal_app/config.py`; the timeouts of the `setup` and `fastapi_app` functions are set in `app.py`, and the fallback models in `cyteonto/config.py`:
 
 | Constant | Default | Effect |
 |----------|---------|--------|
 | `PYTHON_VERSION` | `"3.13"` | Python version used by the image. |
 | `VOLUME_NAME` | `"cyteonto"` | Modal volume name. |
 | `VOLUME_MOUNT_PATH` | `"/cyteonto_data"` | Mount path inside containers. |
-| `DEFAULT_LLM_PROVIDER` | `"together"` | Default for requests that omit `llmProvider`. |
+| `DEFAULT_LLM_PROVIDER` | `"nebius"` | Default for requests that omit `llmProvider`. |
 | `DEFAULT_LLM_MODEL` | `"moonshotai/Kimi-K2.6"` | Default for requests that omit `llmModel`. |
-| `DEFAULT_EMBEDDING_PROVIDER` | `"openrouter"` | Default for requests that omit `embeddingProvider`. |
-| `DEFAULT_EMBEDDING_MODEL` | `"qwen/qwen3-embedding-8b"` | Default for requests that omit `embeddingModel`. |
-| `SECRET_NAME` | `"cyteonto-secrets"` | Modal secret attached to the worker. Must expose `TOGETHER_API_KEY` and `OPENROUTER_API_KEY`. |
+| `DEFAULT_EMBEDDING_PROVIDER` | `"nebius"` | Default for requests that omit `embeddingProvider`. |
+| `DEFAULT_EMBEDDING_MODEL` | `"Qwen/Qwen3-Embedding-8B"` | Default for requests that omit `embeddingModel`. |
+| `SECRET_NAME` | `"cyteonto-secrets"` | Modal secret attached to the worker, with the API keys described in [API keys](#api-keys). |
 | `CUSTOM_DOMAINS` | `["cyteonto.nygen.io"]` | Domains bound to `fastapi_app` via `@modal.asgi_app(custom_domains=...)`. Must be pre-registered and DNS-verified in the Modal dashboard. |
 | `WORKER_CPU`, `WORKER_MEMORY_MB` | `1.0`, `2048` | Worker container resources. |
 | `API_CPU`, `API_MEMORY_MB` | `0.5`, `1024` | ASGI endpoint container resources. |
@@ -476,15 +176,14 @@ All tunables live on `AppConfig` in `modal_app/config.py`:
 
 Redeploy with `uv run modal deploy -m modal_app --env cytetrainer` after changing any of these.
 
-## Error behavior
+## Errors
 
-- Validation errors (empty `authorLabels`, empty `algorithms`, mismatched label lengths) return `400` from `POST /compare`.
-- Missing API key for a provider that the hosted `cyteonto-secrets` secret does not cover also returns `400` from `POST /compare`.
-- Submitting a job does not validate API key validity; a bad key surfaces later as a failed run via `GET /status/{runId}` with `state="failed"` and `error="ModelHTTPError(status=401): ..."`.
-- Missing core files (CSV or OWL) on the volume fail the run with `FileNotFoundError`. Run the `setup` hook to prime the volume.
-- Per-label LLM failures do not fail the run. After retries the label gets a blank description that is not persisted, and the next call with the same `runId` retries only those labels.
-- A per-request embedding failure (after provider-level retries) aborts the run with `RuntimeError`.
+[HTTP API errors](https://docs.nygen.io/CyteOnto/reference/http-api/#errors) lists the responses of the endpoints and the failures of jobs. These points concern the deployment:
+
+- Missing core files (the two CSVs or the OWL) on the volume fail every run with `FileNotFoundError`. Run the `setup` hook to prime the volume.
+- A run for a model pair other than the precomputed ones first describes or embeds all 2,902 Cell Ontology terms and writes them to the volume, which takes much longer.
+- When an embedding request fails, the run switches to the fallback embedding model and then needs the ontology embeddings of the default LLM with that model, `embeddings_nebius_moonshotai-Kimi-K2.6_openrouter_Qwen-Qwen3-Embedding-8B.npz`. The `setup` hook does not download it, so the first run that fails over embeds the 2,902 ontology descriptions with the fallback model and saves the file on the volume, which delays that run.
 
 ## Related
 
-- `cyteonto/README.md` covers the library, the similarity metrics, and the caching rules in depth.
+- The [CyteOnto documentation](https://docs.nygen.io/CyteOnto/) covers the library, the similarity metrics and the caching rules in depth.

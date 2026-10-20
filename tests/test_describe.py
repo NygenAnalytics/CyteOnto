@@ -1,14 +1,39 @@
 """Tests for cyteonto.describe helpers (prompt building, error formatting)."""
 
+from unittest.mock import Mock
+
 import pytest
+from pydantic_ai import ModelAPIError
 
 from cyteonto.describe import (
     _build_prompt,
     _format_exception,
     _label_from_prompt,
+    _run_decompose_once,
+    _run_once,
     describe_cells,
 )
 from cyteonto.models import AgentUsage
+
+
+def _failed_attempt(error: BaseException) -> Mock:
+    """A tenacity retry state whose attempt raised ``error``."""
+    state = Mock()
+    state.outcome.failed = True
+    state.outcome.exception.return_value = error
+    return state
+
+
+class TestRetries:
+    @pytest.mark.parametrize("run", [_run_once, _run_decompose_once])
+    def test_model_api_errors_are_retried(self, run):
+        # pydantic-ai raises the connection errors of a model as ModelAPIError.
+        error = ModelAPIError(model_name="m", message="connection refused")
+        assert run.retry.retry(_failed_attempt(error))
+
+    @pytest.mark.parametrize("run", [_run_once, _run_decompose_once])
+    def test_other_errors_are_not_retried(self, run):
+        assert not run.retry.retry(_failed_attempt(KeyError("x")))
 
 
 class TestBuildPrompt:

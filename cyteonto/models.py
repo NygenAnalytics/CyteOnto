@@ -28,7 +28,11 @@ def _sanitize_filename_part(value: str) -> str:
 
 
 class ModelArtifactKey(BaseModel):
-    """Canonical cache key for an LLM or embedding model configuration."""
+    """Canonical cache key for an LLM or embedding model configuration.
+
+    The provider is lowercased; the model id keeps its case. ``filename_segment()``
+    names the cache files of the model.
+    """
 
     provider: str = Field(
         description="Inference provider slug, e.g. fireworks, together"
@@ -43,6 +47,7 @@ class ModelArtifactKey(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def company(self) -> str:
+        """The part of ``model`` before the first ``/``, or all of it."""
         if "/" in self.model:
             return self.model.split("/", 1)[0]
         return self.model
@@ -50,23 +55,33 @@ class ModelArtifactKey(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def modelName(self) -> str:
+        """The part of ``model`` after the first ``/``, or all of it."""
         if "/" in self.model:
             return self.model.split("/", 1)[1]
         return self.model
 
     def filename_segment(self) -> str:
-        """``{provider}_{company}-{modelName}`` after filesystem sanitization."""
+        """``{provider}_{company}-{modelName}`` after filesystem sanitization.
+
+        ``/`` and ``:`` become ``-``, and spaces become ``_``. For example,
+        ``nebius`` and ``moonshotai/Kimi-K2.6`` give ``nebius_moonshotai-Kimi-K2.6``.
+        """
         company = _sanitize_filename_part(self.company)
         model_name = _sanitize_filename_part(self.modelName)
         return f"{self.provider}_{company}-{model_name}"
 
     @classmethod
     def from_provider_model(cls, provider: str, model: str) -> "ModelArtifactKey":
+        """Return the key of ``model`` served by ``provider``."""
         return cls(provider=provider, model=model)
 
 
 class LlmConfig(BaseModel):
-    """LLM routing identity for description generation caches."""
+    """LLM routing identity for description generation caches.
+
+    ``model`` must equal the ``model_name`` of the agent's model. ``provider`` is
+    only a label for the cache files; the agent decides where requests go.
+    """
 
     provider: str = Field(
         description="Provider slug, e.g. fireworks, together, openrouter"
@@ -74,6 +89,7 @@ class LlmConfig(BaseModel):
     model: str = Field(description="Full model id passed to the agent")
 
     def to_artifact_key(self) -> ModelArtifactKey:
+        """Return the cache key of this model."""
         return ModelArtifactKey.from_provider_model(self.provider, self.model)
 
 
@@ -88,6 +104,7 @@ class CellDescription(BaseModel):
 
     @classmethod
     def blank(cls, label: str = "") -> "CellDescription":
+        """Return a description of ``label`` with all other fields empty."""
         return cls(
             initialLabel=label,
             descriptiveName="",
@@ -97,6 +114,7 @@ class CellDescription(BaseModel):
         )
 
     def is_blank(self) -> bool:
+        """Return whether every field except ``initialLabel`` is empty."""
         return (
             not self.descriptiveName
             and not self.function
@@ -105,6 +123,12 @@ class CellDescription(BaseModel):
         )
 
     def to_sentence(self) -> str:
+        """Return the text that is embedded for this cell type.
+
+        The form is ``<initialLabel> is <descriptiveName>. Function: <function>
+        Disease relevance: <diseaseRelevance> Developmental stage:
+        <developmentalStage>``.
+        """
         return (
             f"{self.initialLabel} is {self.descriptiveName}. "
             f"Function: {self.function} "
@@ -114,6 +138,7 @@ class CellDescription(BaseModel):
 
     @classmethod
     def get_blank(cls) -> "CellDescription":
+        """Return ``blank()`` with an empty label."""
         return cls.blank()
 
 
@@ -131,6 +156,11 @@ class LabelDecomposition(BaseModel):
     @classmethod
     def single(cls, label: str) -> "LabelDecomposition":
         return cls(initialLabel=label, isCompound=False, parts=[label])
+
+    @classmethod
+    def failed(cls, label: str) -> "LabelDecomposition":
+        """Result for a label that could not be decomposed: it has no parts."""
+        return cls(initialLabel=label, isCompound=False, parts=[])
 
 
 class DescriptionFileEnvelope(BaseModel):
@@ -165,6 +195,7 @@ class EmbdConfig(BaseModel):
         return self
 
     def to_artifact_key(self) -> ModelArtifactKey:
+        """Return the cache key of this model."""
         return ModelArtifactKey.from_provider_model(self.provider, self.model)
 
 
@@ -177,6 +208,7 @@ class ModelPairUsage(BaseModel):
     embedding: EmbdConfig
 
     def to_status_dict(self) -> dict[str, str]:
+        """Return the tiers and the provider and model names as strings."""
         return {
             "llmTier": self.llmTier,
             "embeddingTier": self.embeddingTier,
@@ -204,6 +236,7 @@ class AgentUsage(BaseModel):
         run_usage: RunUsage,
         tool_counts: dict[str, int] | None = None,
     ) -> None:
+        """Add the usage of one pydantic-ai run and its tool calls."""
         self.modelName = model_name
         self.requests += run_usage.requests
         self.inputTokens += run_usage.input_tokens or 0
@@ -214,6 +247,7 @@ class AgentUsage(BaseModel):
                 self.toolUsage[tool] = self.toolUsage.get(tool, 0) + n
 
     def merge(self, other: "AgentUsage") -> None:
+        """Add the counts of ``other`` to this tally."""
         self.requests += other.requests
         self.inputTokens += other.inputTokens
         self.outputTokens += other.outputTokens

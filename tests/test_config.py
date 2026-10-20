@@ -1,6 +1,11 @@
 """Tests for cyteonto.config.Config (schema v3 defaults)."""
 
+from typing import get_args
+
+from pydantic_ai import ModelAPIError, ModelHTTPError
+
 from cyteonto.config import Config
+from cyteonto.models import EmbdProvider
 
 
 class TestConfig:
@@ -20,11 +25,17 @@ class TestConfig:
         assert cfg.PROVIDER_API_KEY_ENV["fireworks"] == "FIREWORKS_API_KEY"
         assert cfg.PROVIDER_API_KEY_ENV["openrouter"] == "OPENROUTER_API_KEY"
 
-    def test_provider_urls_present_for_known_providers(self):
+    def test_every_embedding_provider_has_an_endpoint(self):
         cfg = Config()
-        for provider in ("nebius", "deepinfra", "openrouter", "openai", "google", "ollama", "together"):
-            assert provider in cfg._PROVIDER_URL
-            assert cfg._PROVIDER_URL[provider].startswith(("http://", "https://"))
+        assert set(cfg._PROVIDER_URL) == set(get_args(EmbdProvider))
+        for url in cfg._PROVIDER_URL.values():
+            assert url.startswith(("http://", "https://"))
+
+    def test_model_api_errors_are_retried(self):
+        # pydantic-ai raises connection errors as ModelAPIError, the parent of
+        # ModelHTTPError.
+        assert ModelAPIError in Config._RETRYABLE_EXCEPTIONS
+        assert issubclass(ModelHTTPError, Config._RETRYABLE_EXCEPTIONS)
 
     def test_result_columns_shape(self):
         cfg = Config()

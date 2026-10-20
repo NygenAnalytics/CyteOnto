@@ -54,7 +54,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://www.nygen.io/products/cytetype"
-Documentation = "https://github.com/NygenAnalytics/CyteOnto/blob/master/cyteonto/README.md"
+Documentation = "https://docs.nygen.io/CyteOnto/"
 Repository = "https://github.com/NygenAnalytics/CyteOnto"
 Issues = "https://github.com/NygenAnalytics/CyteOnto/issues"
 Changelog = "https://github.com/NygenAnalytics/CyteOnto/releases"
@@ -62,6 +62,18 @@ Changelog = "https://github.com/NygenAnalytics/CyteOnto/releases"
 [dependency-groups]
 dev = [
     "seaborn>=0.13.2",
+]
+# Builds the MyST site and the Sphinx API reference (make -C docs html).
+docs = [
+    "mystmd>=1.11.0",
+    "jupytext>=1.19.6",
+    "nbformat>=5.10",
+    "myst-parser",
+    "sphinx",
+    "sphinx-autodoc-typehints",
+    "sphinx-book-theme",
+    "sphinx-copybutton",
+    "pyyaml",
 ]
 
 [tool.hatch.version]
@@ -72,3 +84,14 @@ packages = ["cyteonto"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# The documentation tests import the tooling in docs/ from the repository root.
+pythonpath = ["."]
+
+# The documentation tooling in docs/ needs the docs dependency group; its tests
+# check it instead.
+[tool.mypy]
+exclude = ["^docs/"]
+
+[[tool.mypy.overrides]]
+module = ["docs.*"]
+follow_imports = "skip"

@@ -1,8 +1,8 @@
 """Download shipped and precomputed assets into the cyteonto data tree.
 
 Run:
-    uv run python cyteonto/setup.py
-    uv run python cyteonto/setup.py --force
+    uv run python -m cyteonto.setup
+    uv run python -m cyteonto.setup --force
 """
 
 import argparse

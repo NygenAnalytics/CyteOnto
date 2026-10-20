@@ -9,7 +9,7 @@
 5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: a Gaussian kernel on the cosine similarity of the CL term embeddings). Compound pairs default to the maximum entry in the part-by-part score matrix (`compound_scoring="max"`); set `compound_scoring="hungarian_mean"` for Hungarian assignment mean with a coverage penalty when part counts differ.
 6. Returns a tidy DataFrame with one row per `(algorithm, pair_index)`.
  
-Updated ReadMe: [cyteonto/README.md](cyteonto/README.md). Process flow and file layout: [docs/WORKFLOW.md](docs/WORKFLOW.md), [docs/FILE_MANAGEMENT.md](docs/FILE_MANAGEMENT.md).
+📚 **Documentation:** [docs.nygen.io/CyteOnto](https://docs.nygen.io/CyteOnto/) covers the hosted API, the Python package, the similarity metrics, compound labels and caching.
 
 
 ## Modal Service
@@ -55,7 +55,19 @@ curl -sS "$CYTEONTO_URL/result/$RUN_ID?format=csv" -o "$RUN_ID.csv"
 ```
 
 
-Read the [modal_app/README.md](modal_app/README.md) for more details. Check out the [modal_app/example.py](modal_app/example.py) file to run via Python client.
+The [hosted API quickstart](https://docs.nygen.io/CyteOnto/getting-started/quickstart-api/) walks through these steps, and the [HTTP API reference](https://docs.nygen.io/CyteOnto/reference/http-api/) lists every request field. Check out the [modal_app/example.py](modal_app/example.py) file to run via Python client.
+
+
+## Python package
+
+`cyteonto` is not published on PyPI. Install it from GitHub and download the Cell Ontology files once:
+
+```bash
+pip install "git+https://github.com/NygenAnalytics/CyteOnto.git"
+python -m cyteonto.setup
+```
+
+The [Python quickstart](https://docs.nygen.io/CyteOnto/getting-started/quickstart-python/) compares labels with your own LLM and embedding API keys.
 
 
 ## Citation
@@ -66,8 +78,8 @@ CyteOnto is a part of the [CyteType](https://www.nygen.io/products/cytetype). If
 
 ```bibtex
 @article{cytetype2025,
-  title={Multi-agent AI enables evidence-based cell annotation in single-cell transcriptomics},
-  author={Gautam Ahuja, Alex Antill, Yi Su, Giovanni Marco Dall'Olio, Sukhitha Basnayake, Göran Karlsson, Parashar Dhapola},
+  title={Multi-agent {AI} enables evidence-based cell annotation in single-cell transcriptomics},
+  author={Ahuja, Gautam and Antill, Alex and Su, Yi and Dall'Olio, Giovanni Marco and Basnayake, Sukhitha and Karlsson, G{\"o}ran and Dhapola, Parashar},
   journal={bioRxiv},
   year={2025},
   doi={10.1101/2025.11.06.686964},

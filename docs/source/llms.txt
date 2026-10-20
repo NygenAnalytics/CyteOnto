@@ -1,0 +1,37 @@
+# CyteOnto
+
+> Compare cell type labels in Cell Ontology space. CyteOnto matches the labels of a study's authors and of one or more annotation algorithms to Cell Ontology terms with an LLM and an embedding model, and scores each pair of terms with an ontology-aware similarity metric. Use the hosted HTTP API at https://cyteonto.nygen.io without API keys, or the `cyteonto` Python package with your own models. This documentation is published from the master branch of the CyteOnto repository.
+
+- [Home](./): what CyteOnto does, the hosted API and the Python package, a first comparison and where to go next
+
+## Getting started
+
+- [Quickstart (hosted API)](getting-started/quickstart-api/): submit labels to the hosted API with curl or Python, poll the job, download the results and read the main columns
+- [Installation](getting-started/installation/): install the `cyteonto` package from GitHub, download the Cell Ontology files and the precomputed ontology embeddings, and set the API keys
+- [Quickstart (Python)](getting-started/quickstart-python/): compare author labels with the labels of two algorithms using the precomputed model pair on Nebius Token Factory, in a notebook or a script
+- [How CyteOnto works](getting-started/how-cyteonto-works/): how labels become Cell Ontology terms through decomposition, description, embedding and matching, how pairs are scored, what is sent to the providers and what it costs
+
+## Guides
+
+- [Models and providers](guides/models-and-providers/): the precomputed model pairs, pydantic-ai agents and their base URLs, embedding providers and API keys, fallback models, reasoning, the PubMed tool and concurrency
+- [Compound labels](guides/compound-labels/): how doublets and mixed populations are split into cell types and scored with `max` or `hungarian_mean`, with worked examples
+- [Similarity metrics](guides/similarity-metrics/): the ten metrics, reference scores for pairs of Cell Ontology terms, the parameters of `cosine_kernel` and the match threshold
+- [Caching and runs](guides/caching/): run IDs, what is cached and reused, how to regenerate caches, and `cache_stats()`, `clear_run()` and `purge_stale()`
+- [Labels in AnnData](guides/anndata/): compare label columns of `adata.obs` per cell with `compare_anndata()` or per combination of labels, and handle missing values
+- [Read the results](guides/results/): every result column, the `similarity_method` values, how to interpret the scores, and pandas recipes to summarize and save them
+
+## Reference
+
+- [Python API](api/index.html): exact signatures and docstrings of the `cyteonto` package
+- [CyteOnto class](api/cyteonto.html): `from_config()`, `compare()`, `compare_anndata()`, the cache methods and the usage attributes
+- [Model configuration](api/configuration.html): `LlmConfig`, `EmbdConfig` and `ModelArtifactKey`, with every field and default
+- [Cell type descriptions](api/descriptions.html): `CellDescription`, the description that the LLM writes for each label and term
+- [Usage records](api/usage.html): `AgentUsage` and `ModelPairUsage`, the LLM usage and the model tiers of an instance
+- [HTTP API](reference/http-api/): the endpoints of the hosted API, every field of a comparison request, the job status, the result formats and the errors
+- [Environment and limits](reference/configuration/): the environment variables, logging, and the retry rules, time limits and usage limits of model requests
+- [Data files and formats](reference/files/): the layout of the data and run directories, file names, and the formats of the CSV, JSON and NPZ files
+
+## Support
+
+- [Troubleshooting](support/troubleshooting/): fixes for common problems with setup, API keys, model names, async calls, embeddings, unexpected scores and the hosted API
+- [Cite CyteOnto](support/citing/): how to cite CyteOnto, what to record to reproduce a comparison, and the license
