@@ -515,7 +515,13 @@ async def decompose_label(
     usage_limits: UsageLimits = config.DEFAULT_USAGE_LIMITS,
     reasoning: bool = False,
 ) -> tuple[LabelDecomposition, AgentUsage]:
-    """Decompose a label into one or more cell-type parts."""
+    """Decompose a label into one or more cell-type parts.
+
+    If the request fails after its retries, the result has no parts, so that callers
+    can keep the label whole without caching the failure. A label that exceeds the
+    usage limits would exceed them again, so it is kept whole as a single part, which
+    callers cache.
+    """
     agent = _build_decompose_agent(base_agent, reasoning)
     usage = AgentUsage(agentName=agent.name or "LabelDecompositionAgent")
     try:
@@ -534,7 +540,7 @@ async def decompose_label(
         return LabelDecomposition.single(label), usage
     except Exception as e:
         logger.error(f"Decomposition failed for '{label}': {_format_exception(e)}")
-        return LabelDecomposition.single(label), usage
+        return LabelDecomposition.failed(label), usage
 
     usage.modelName = str(agent.model.model_name)  # type: ignore
     usage.requests = req
@@ -551,7 +557,10 @@ async def decompose_labels(
     max_concurrent: int = config.MAX_CONCURRENT_DESCRIPTIONS,
     reasoning: bool = False,
 ) -> tuple[list[LabelDecomposition], AgentUsage]:
-    """Decompose many labels concurrently, preserving input order."""
+    """Decompose many labels concurrently, preserving input order.
+
+    Labels that could not be decomposed have no parts.
+    """
     if not labels:
         return [], AgentUsage(agentName="LabelDecompositionAgent")
 
@@ -559,7 +568,7 @@ async def decompose_labels(
     sem = asyncio.Semaphore(max_concurrent)
     total_usage = AgentUsage(agentName="LabelDecompositionAgent")
     results: list[LabelDecomposition] = [
-        LabelDecomposition.single(lbl) for lbl in labels
+        LabelDecomposition.failed(lbl) for lbl in labels
     ]
 
     async def run_one(i: int) -> tuple[int, LabelDecomposition, AgentUsage]:

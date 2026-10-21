@@ -2,16 +2,7 @@
 
 Semantic comparison of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html).
 
-Given two parallel lists of cell type labels (one from the study author, one from an annotation algorithm), the package:
-
-1. Decomposes mixture labels into cell-type parts with an LLM when the label names multiple types.
-2. Generates a structured description for each label or part using an LLM.
-3. Embeds those descriptions with a configured embedding model.
-4. Matches each embedding to the closest CL term via cosine similarity.
-5. Scores each author/algorithm pair using an ontology-aware similarity metric (default: kernelised cosine on the CL term embeddings). Compound pairs default to the maximum entry in the part-by-part score matrix (`compound_scoring="max"`); set `compound_scoring="hungarian_mean"` for Hungarian assignment mean with a coverage penalty when part counts differ.
-6. Returns a tidy `pandas.DataFrame` with per-pair scores.
-
-All LLM descriptions and embeddings are persisted on disk and reused across runs.
+The documentation at [docs.nygen.io/CyteOnto](https://docs.nygen.io/CyteOnto/) describes how to use the package: the [Python quickstart](https://docs.nygen.io/CyteOnto/getting-started/quickstart-python/), the [API reference](https://docs.nygen.io/CyteOnto/api/index.html), [models and providers](https://docs.nygen.io/CyteOnto/guides/models-and-providers/), [compound labels](https://docs.nygen.io/CyteOnto/guides/compound-labels/), [similarity metrics](https://docs.nygen.io/CyteOnto/guides/similarity-metrics/), [caching](https://docs.nygen.io/CyteOnto/guides/caching/) and the [data files](https://docs.nygen.io/CyteOnto/reference/files/). This file describes the code.
 
 ---
 
@@ -20,16 +11,17 @@ All LLM descriptions and embeddings are persisted on disk and reused across runs
 ```
 cyteonto/
 ├── __init__.py       Public exports
-├── config.py         Environment variables (API keys, log level)
+├── config.py         Model defaults, provider URLs and API key variables, limits, result columns
 ├── logger.py         Loguru configuration
-├── paths.py          PathConfig, single source of truth for file locations
-├── models.py         CellDescription, LabelDecomposition, EmbdConfig, AgentUsage
+├── paths.py          PathConfig, which resolves the file locations
+├── models.py         CellDescription, LabelDecomposition, EmbdConfig, LlmConfig, ModelArtifactKey, ModelPairUsage, AgentUsage
 ├── storage.py        NPZ and JSON read/write (ontology + user variants)
 ├── embed.py          Async HTTP embedding generation
 ├── describe.py       LLM description and compound-label decomposition
 ├── ontology.py       OntologyMapping (CSV) and OntologySimilarity (OWL + metrics)
 ├── cyteonto.py       CyteOnto orchestrator class
-└── data/             Shipped and generated data (see "On-disk layout")
+├── setup.py          Downloads the Cell Ontology files and precomputed artifacts (python -m cyteonto.setup)
+└── data/             Downloaded and generated data (not tracked)
 ```
 
 ### Module dependency graph
@@ -52,593 +44,44 @@ cyteonto/
 
 Lower layers do not import higher ones. The `CyteOnto` class in `cyteonto.py` is the only module that wires everything together.
 
----
-
-## Public API
-
-Imported from `cyteonto`:
-
-| Symbol              | Kind     | Purpose                                              |
-|---------------------|----------|------------------------------------------------------|
-| `CyteOnto`          | class    | Main orchestrator                                    |
-| `CellDescription`   | model    | Structured LLM output for a single cell type         |
-| `EmbdConfig`        | model    | Embedding provider configuration                     |
-| `LlmConfig`         | model    | LLM provider + model id for description caches       |
-| `ModelArtifactKey`  | model    | Canonical cache key (provider, company, modelName)   |
-| `AgentUsage`        | model    | LLM request/token/tool tally                         |
-| `RESULT_COLUMNS`    | list     | Column order of the DataFrame returned by `compare`  |
-
-### Quick start
-
-```python
-import os
-from pydantic_ai import Agent
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
-
-from cyteonto import CyteOnto, EmbdConfig, LlmConfig
-
-agent = Agent(
-    OpenRouterModel(
-        "moonshotai/Kimi-K2.6",
-        provider=OpenRouterProvider(api_key=os.environ["OPENROUTER_API_KEY"]),
-    )
-)
-
-llm = LlmConfig(provider="openrouter", model="moonshotai/Kimi-K2.6")
-embd = EmbdConfig(apiKey=os.environ["EMBEDDING_MODEL_API_KEY"])
-
-cyto = await CyteOnto.from_config(agent=agent, embedding=embd, llm=llm)
-
-df = await cyto.compare(
-    author_labels=["animal stem cell", "BFU-E", "neutrophilic granuloblast"],
-    algorithms={
-        "algo1": ["stem cell", "blast forming unit erythroid", "spermatogonium"],
-        "algo2": ["neuronal receptor cell", "stem cell", "ovum"],
-    },
-    run_id="sample_run_001",         # optional; auto-generated UUID if omitted
-    metric="cosine_kernel",
-    compound_scoring="max",            # default; use "hungarian_mean" for assignment mean
-)
-print(df)
-print("run_id used:", df["run_id"].iloc[0])
-```
-
-If you omit `run_id`, the call generates one of the form `run-<uuid4>` and logs it at INFO level. Pick it up from the logs or from `df["run_id"].iloc[0]`. The same id is used on disk under `user_files/embeddings/<run_id>/`, `user_files/descriptions/<run_id>/`, and `user_files/decompositions/<run_id>/`.
-
-To remove the cached user artifacts for that run later:
-
-```python
-cyto.clear_run("sample_run_001")                        # drop everything for the run
-cyto.clear_run("sample_run_001", kind="algorithm")      # drop all algorithm caches only
-cyto.clear_run("sample_run_001", kind="algorithm", identifier="algo1")  # one algorithm
-```
-
-### Result DataFrame
-
-One row per `(algorithm, pair_index)`:
-
-| Column                            | Type        | Meaning                                                                      |
-|-----------------------------------|-------------|------------------------------------------------------------------------------|
-| `run_id`                          | str         | The `run_id` passed to `compare`.                                            |
-| `algorithm`                       | str         | Algorithm key from the `algorithms` mapping.                                 |
-| `pair_index`                      | int         | Position inside the label list, starting at 0.                               |
-| `author_label`                    | str         | The author label for this pair (lowercased at compare entry).                |
-| `algorithm_label`                 | str         | The algorithm label for this pair (lowercased at compare entry).             |
-| `author_ontology_id`              | str         | Best CL match per author part, semicolon-separated in part order. Empty string if unmatched. |
-| `author_ontology_name`            | str         | Primary CSV label (or OWL fallback) for each id in `author_ontology_id`. |
-| `author_embedding_similarity`     | float \| str | Cosine similarity of each author part to its CL match. Single float when one part; semicolon-separated floats when multiple parts. |
-| `algorithm_ontology_id`           | str         | Best CL match per algorithm part, same rules as author. |
-| `algorithm_ontology_name`         | str         | Names for ids in `algorithm_ontology_id`. |
-| `algorithm_embedding_similarity`  | float \| str | Same shape as author embedding similarity, for algorithm parts. |
-| `cytescore_similarity`            | float       | Score under the chosen `metric` / compound reducer; `0.0` if either side is unmatched. |
-| `similarity_method`               | str         | `cytescore`, `cytescore_compound`, `string_similarity`, `partial_match`, `no_matches`, or `empty`. |
-
----
-
-## Configuration
-
-### Environment variables
-
-Read once on import, via `python-dotenv`:
-
-| Variable                    | Purpose                                                   | Default |
-|-----------------------------|-----------------------------------------------------------|---------|
-| `EMBEDDING_MODEL_API_KEY`   | Fallback `apiKey` when `EmbdConfig.apiKey` is `None`.     | `""`    |
-| `NCBI_API_KEY`              | Optional. Raises PubMed rate limits for the agent tool.   | `""`    |
-| `CYTEONTO_LOG_LEVEL`        | Loguru log level (`DEBUG`, `INFO`, `WARNING`, ...).       | `DEBUG` |
-| `CYTEONTO_LOG_FILE`         | Optional log file path with 10 MB rotation.               | unset   |
-
-The LLM agent keys follow whatever the caller passes to `pydantic_ai`; this package does not manage them.
-
-### `EmbdConfig`
-
-```python
-EmbdConfig(
-    provider="openrouter",          # deepinfra | ollama | openai | google | openrouter | together
-    model="qwen/qwen3-embedding-8b",
-    apiKey=None,                    # falls back to EMBEDDING_MODEL_API_KEY
-    modelSettings=None,             # openrouter-only pass-through; merged into the request body
-    maxConcurrent=100,              # concurrency cap for embedding requests
-)
-```
-
-Field names are camelCase to stay consistent with the surrounding codebase.
-
-Default behavior when the caller writes `EmbdConfig()` (no args):
-
-- `provider="openrouter"`, `model="qwen/qwen3-embedding-8b"`, `maxConcurrent=100`.
-- `modelSettings` is auto-populated to `{"provider": {"order": ["DeepInfra"], "allow_fallbacks": True}}` so OpenRouter tries DeepInfra first and falls back to other providers if it is unavailable.
-- To disable the default routing, pass `modelSettings={}`. To customise it, pass your own `{"provider": {...}}` dict.
-- `modelSettings` is merged into the embedding request payload only when `provider == "openrouter"`; it is ignored for every other provider.
-
-`CyteOnto.__init__` fails fast with `ValueError` if the resolved `apiKey` is empty and the provider is not `ollama`.
-
-### `LlmConfig`
-
-```python
-LlmConfig(
-    provider="together",              # routing host slug (lowercased on disk)
-    model="moonshotai/Kimi-K2.6",     # must match agent.model.model_name
-)
-```
-
-Cache filenames include both `provider` and the parsed `company` / `modelName` from `model`. The pydantic-ai `Agent` does not expose the routing provider reliably, so pass `LlmConfig` explicitly even when the agent uses a custom `base_url`.
-
-### Primary and fallback model pairs
-
-Constants in `config.py` define the hosted defaults:
-
-| Tier | LLM | Embeddings |
-|------|-----|------------|
-| Primary | `nebius` + `moonshotai/Kimi-K2.6` | `nebius` + `Qwen/Qwen3-Embedding-8B` |
-| Fallback | `fireworks` + `moonshotai/Kimi-K2.6` | `openrouter` + `Qwen/Qwen3-Embedding-8B` (DeepInfra routing) |
-
-Pass `fallback_agent`, `fallback_embedding`, and `fallback_llm` to `CyteOnto` / `from_config` to enable operation-level failover: blank descriptions after the primary passes are retried with the fallback agent; a failed primary embedding batch retries with the fallback embedding config (cache keys switch to the fallback embedding artifact key). Track usage via `cyto.model_pair_usage` (`llmTier`, `embeddingTier`, effective provider/model fields).
-
-Env vars: `NEBIUS_API_KEY`, `FIREWORKS_API_KEY`, `OPENROUTER_API_KEY` (see `PROVIDER_API_KEY_ENV` in `config.py`).
-
-### Recommended LLM
-
-The package suggests `moonshotai/Kimi-K2.6` via Together or OpenRouter. Any pydantic-ai supported model works as long as `LlmConfig.model` matches the agent.
-
----
-
-## `CyteOnto` class
-
-### Constructor
-
-```python
-CyteOnto(
-    agent: pydantic_ai.Agent,
-    embedding: EmbdConfig,
-    llm: LlmConfig,
-    data_dir: str | Path | None = None,   # defaults to cyteonto/data
-    user_dir: str | Path | None = None,   # defaults to <data_dir>/user_files
-    max_description_concurrency: int = 100,
-    use_pubmed_tool: bool = True,
-)
-```
-
-`__init__` is cheap: it sets up paths and an `OntologyMapping` (which itself lazy-loads the CSV on first access). It does not read the OWL file, the ontology embeddings, or call any network.
-
-### `from_config` (async factory)
-
-```python
-cyto = await CyteOnto.from_config(
-    agent=agent,
-    embedding=embd,
-    llm=llm,
-    data_dir=None,
-    user_dir=None,
-    force_regenerate=False,
-    max_description_concurrency=100,
-    use_pubmed_tool=True,
-)
-```
-
-Additional behavior on top of `__init__`:
-
-1. Checks that `cell_ontology/cell_to_cell_ontology.csv` (and preferably the enriched CSV) and `cell_ontology/cl.owl` exist. Lookups prefer `cell_to_cell_ontology_enriched.csv` when present.
-2. Computes ontology paths from `llm.to_artifact_key()` and `embedding.to_artifact_key()`.
-3. If `force_regenerate=True`, unlinks both the ontology embeddings NPZ and the descriptions JSON before proceeding.
-4. Loads the descriptions JSON (if present) and drops any blank entries so they can be retried.
-5. If every CL id has a non-blank description on disk and the embeddings NPZ already exists, returns immediately.
-6. Otherwise, generates descriptions only for the missing or blank ids, merges them back into the JSON (still skipping any that came back blank), and rebuilds the ontology embeddings NPZ for all CL ids. For CL ids that still have no description after retries, the raw joined label is used as the embedding text so the NPZ stays aligned; those ids are retried on the next call.
-
-Use this when you want the package to be ready for comparison calls right after construction.
-
-### `compare` (async)
-
-```python
-df = await cyto.compare(
-    author_labels: list[str],
-    algorithms: dict[str, list[str]] | Sequence[tuple[str, list[str]]],
-    *,
-    run_id: str | None = None,
-    metric: str = "cosine_kernel",
-    metric_params: dict[str, Any] | None = None,
-    min_match_similarity: float = 0.1,
-    use_cache: bool = True,
-    compound_scoring: Literal["max", "hungarian_mean"] = "max",
-)
-```
-
-All arguments after the `*` are keyword-only.
-
-Constraints:
-
-- Every value in `algorithms` must be the same length as `author_labels`. Mismatched lengths raise `ValueError`.
-- Algorithm names must be unique. `"author"` is reserved and rejected.
-- `compound_scoring` must be `"max"` or `"hungarian_mean"`; any other value raises `ValueError`.
-- Non-empty author and algorithm labels (and decomposed parts) are lowercased before decompose/describe/embed so casing does not split caches.
-- `run_id` is used as a cache namespace on disk. Reusing the same id reuses cached author and algorithm embeddings when the labels match. If you pass `None`, a UUID of the form `run-<uuid4>` is generated and logged; the same value is written into every result row so you can recover it later.
-
-Call flow:
-
-1. Lowercase non-empty labels on both sides.
-2. `_resolve_label_parts` decomposes unique labels via LLM (cached per `run_id` under `decompositions/`). Compound parts are lowercased.
-3. `_embed_user_labels` on the union of sanitized parts per side (author, then each algorithm).
-4. `_match` returns the best CL id and similarity for each part.
-5. `_ensure_similarity()` lazy-loads the OWL file and the ontology embeddings into `OntologySimilarity`.
-6. For each aligned pair index:
-   - **Simple pair** (one part on each side): single `OntologySimilarity.similarity` call; `similarity_method` from `_method_for`.
-   - **Compound pair** (more than one part on either side): build an m×n score matrix `S`, then reduce with `compound_scoring` (see below); `similarity_method = cytescore_compound`.
-7. Rows are concatenated into a DataFrame with columns from `RESULT_COLUMNS`. Ontology ids/names and embedding similarities list **all** parts in order (not only Hungarian-matched pairs).
-
-### Compound label scoring
-
-Mixture labels such as doublets or mixed populations are poor matches when embedded as a single string. `compare` therefore:
-
-1. Calls `decompose_labels` to split a label into one or more cell-type parts (semicolon-separated synonyms stay as one part; compound part names are lowercased).
-2. Embeds and matches each unique part.
-3. Builds matrix `S` where `S[i,j]` is the cytescore between author part `i` and algorithm part `j`.
-4. Reduces `S` with `compound_scoring`:
-   - **`"max"` (default):** `cytescore_similarity = max(S)`.
-   - **`"hungarian_mean"`:** pick `k = min(m,n)` one-to-one assignments that maximize total score; take the mean of those `k` scores; if `m ≠ n`, multiply by coverage `min(m,n) / max(m,n)`.
-5. Writes `similarity_method = cytescore_compound`. Result ontology ids/names and per-part embedding similarities include every part on that side.
-
-Illustrative scores with `compound_scoring="hungarian_mean"` (see `notebooks/quick_tutorial.ipynb`):
-
-| Scenario | m×n | Typical score |
-|----------|-----|---------------|
-| Same compound | 2×2 | ~1.0 |
-| One shared type | 2×2 | ~0.5 |
-| No shared types | 2×2 | ~0.07 |
-| Partial overlap, extra author type | 3×2 | ~0.35 |
-| Author doublet vs single type | 2×1 | best match × 0.5 |
-
-With the default `"max"`, the same matrices report the highest single cell of `S` instead (for example 2×1 with scores `[0.6, 0.2]` yields `0.6`).
-
-### `compare_anndata` (async)
-
-Pulls label lists out of `adata.obs[target_columns]` for each AnnData object and delegates to `compare`. Skips any object missing `author_column` and warns for missing target columns.
-
-### Cache utilities
-
-```python
-cyto.cache_stats(run_id=None)
-# {"root", "total_files", "total_size_mb", "stale_files"}
-
-cyto.clear_run(run_id, kind=None, identifier=None) -> int
-# deletes user embeddings + descriptions for a run.
-# kind=None           -> removes all kinds under the run
-# kind="author"       -> removes only the author subtree
-# kind="algorithm"    -> removes all algorithm caches under the run
-# kind="algorithm", identifier="algo1" -> removes just that algorithm's files
-
-cyto.purge_stale(run_id=None) -> int
-# deletes user NPZs that lack the inline `labels` key (legacy format)
-```
-
-Scope is `data/user_files/embeddings/` and the matching `descriptions/` subtree (optionally filtered by `run_id`). Decomposition caches live under `decompositions/<run_id>/` and are not removed by `clear_run` today.
-
-### `usage`
-
-`cyto.usage` is an `AgentUsage` accumulating every LLM call made through the instance: request count, input/output/total tokens, and per-tool counts. Use it after `from_config` or `compare` to measure cost.
-
----
-
-## `compare` call graph
+### Call graphs
 
 ```
+CyteOnto.from_config
+ └─ _prepare_ontology
+     ├─ storage.load_descriptions                  ontology descriptions of the LLM
+     ├─ _describe_labels(terms without one)        describe.describe_cells, then the fallback agent
+     ├─ storage.save_descriptions                  after deleting the NPZs of the old descriptions
+     └─ _embed_ontology                            embed.embed_texts, save NPZ
+         └─ _load_or_embed_ontology                if the primary fails: check the fallback, its NPZ, then switch
+
 CyteOnto.compare
- ├─ _resolve_label_parts(author_labels)            (LLM decompose + decompositions JSON cache)
- ├─ _embed_user_labels(unique author parts, ...)
- │   ├─ storage.load_descriptions(path)
- │   ├─ storage.load_user_embeddings(path)
- │   ├─ describe.describe_cells(missing_or_blank)
- │   ├─ embed.embed_texts(sentences, EmbdConfig)
- │   ├─ storage.save_descriptions
+ ├─ _resolve_label_parts(author_labels)            LLM decompose + decompositions JSON cache, shared by the sides of the call
+ ├─ _embed_user_labels(author parts)
+ │   ├─ storage.load_descriptions / load_user_embeddings
+ │   ├─ _describe_labels(missing or blank)
+ │   ├─ storage.save_descriptions                  after deleting the NPZs of the old descriptions
+ │   ├─ _embed_with_failover(texts)                embed.embed_texts, then the fallback embedding
+ │   │   └─ _load_or_embed_ontology                at a failover: NPZ of the fallback model, then switch
+ │   ├─ _record_embedding_tier                     model whose label embeddings are matched
  │   └─ storage.save_user_embeddings
- ├─ _match(author_part_emb)
- ├─ _ensure_similarity
+ ├─ _match(author part embeddings)
+ ├─ _ensure_similarity                             OntologySimilarity (OWL + ontology embeddings)
  └─ for each algorithm:
      ├─ _resolve_label_parts(algo_labels)
-     ├─ _embed_user_labels(unique algo parts, ...)
-     ├─ _match(algo_part_emb)
+     ├─ _embed_user_labels(algo parts)
+     ├─ _match(algo part embeddings)
+     ├─ _ensure_similarity                         reloaded after an embedding failover
      └─ for each pair_index:
          ├─ simple: OntologySimilarity.similarity(a_id, g_id, ...)
-         └─ compound: build S; max(S) or _hungarian_match_mean(S) → cytescore_compound
+         └─ compound: build S; max(S) or _hungarian_match_mean(S)
 ```
-
----
-
-## Similarity metrics
-
-Implemented in `OntologySimilarity.similarity(id1, id2, metric, metric_params)`.
-
-| Metric                         | Needs embeddings | Needs OWL | Notes                                                              |
-|--------------------------------|:----------------:|:---------:|--------------------------------------------------------------------|
-| `cosine_kernel` (default)      | yes              | no        | Gaussian hill on raw embedding cosine.                             |
-| `cosine_direct`                | yes              | no        | Raw embedding cosine.                                              |
-| `path`                         | no               | yes       | `1 / avg(depth(id1, LCA), depth(id2, LCA))`.                       |
-| `set:jaccard`                  | no               | yes       | Jaccard of ancestor sets including the term itself.                |
-| `set:cosine`                   | no               | yes       | `|A ∩ B| / sqrt(|A| * |B|)`.                                       |
-| `set:weighted_jaccard`         | no               | yes       | Jaccard weighted by ancestor depth.                                |
-| `weighted:num_ancestors`       | no               | yes       | Weighted jaccard using `1 / (|ancestors(a)| + 1)`.                 |
-| `weighted:specificity`         | no               | yes       | Weighted jaccard using ancestor depth divided by term depth.       |
-| `weighted:embedding_cosine`    | yes              | yes       | Weighted jaccard using cosine between ancestor and term embeddings. |
-| `simple`                       | no               | no        | `difflib.SequenceMatcher` fallback on the CL id strings.           |
-
-`cosine_kernel` supported params (`metric_params`):
-
-| Key        | Default | Description                                  |
-|------------|---------|----------------------------------------------|
-| `center`   | `1.0`   | Peak of the Gaussian on the cosine axis.     |
-| `width`    | `0.25`  | Standard deviation of the Gaussian.          |
-| `amplitude`| `1.0`   | Peak value of the hill.                      |
-
-Return value is always in `[0, 1]`. Identical ids short-circuit to `1.0`. On any unexpected failure the code falls back to `simple` with a warning.
-
----
-
-## LLM description generation
-
-`describe.describe_cell(base_agent, label, use_pubmed=True)`:
-
-1. Builds a dedicated `Agent` with `output_type=CellDescription` and a plain `get_pubmed_abstracts` tool when `use_pubmed=True`.
-2. Runs the agent with a directive prompt that specifies each field, length caps, tone, and the treatment of ambiguous labels. No examples are embedded in the prompt to avoid anchoring.
-3. Tallies `request/token/tool` usage from the pydantic-ai run into an `AgentUsage`.
-4. Returns `(CellDescription, AgentUsage)`.
-
-Retries: up to `RETRY_ATTEMPTS = 4` attempts with exponential backoff (`RETRY_WAIT_MIN = 1 s` to `RETRY_WAIT_MAX = 15 s`) on `ModelHTTPError`, `UnexpectedModelBehavior`, pydantic `ValidationError`, `ConnectionError`, `TimeoutError`, and `asyncio.TimeoutError`. Each attempt is capped at `PER_ATTEMPT_TIMEOUT = 120 s` via `asyncio.wait_for` so a single hung HTTP call cannot stall the batch.
-
-Every failed attempt logs one `WARNING` line via the tenacity `before_sleep` hook, with the label, the attempt number, the underlying exception (HTTP status is surfaced for `ModelHTTPError`), and the next backoff:
-
-```
-WARNING: [alveolar macrophage] attempt 2/4 failed: ModelHTTPError(status=429): ... Retrying in 2.0s
-```
-
-The `RetryError` that tenacity raises after the final attempt is unwrapped before logging so the original exception class and message appear in the log line.
-
-If all attempts fail, `describe_cell` returns `(CellDescription.blank(label), AgentUsage(...))` and the run continues.
-
-Usage limits default to `request_limit=50, input_tokens_limit=60_000`. Override with the `usage_limits` keyword.
-
-`describe.describe_cells(base_agent, labels, use_pubmed=True, max_concurrent=10, second_pass_wait_seconds=5.0)`:
-
-1. First pass: runs `describe_cell` for every label under an `asyncio.Semaphore(max_concurrent)`. Progress is logged on a 5 percent stride (`Description progress (pass 1): 13/260`).
-2. If any slot came back blank, sleeps `second_pass_wait_seconds` and reruns `describe_cell` only for those labels. This gives a transient outage a full second set of 4 retries without requiring the caller to rerun anything.
-3. Emits a single end-of-batch summary at `INFO` on full success, or `WARNING` if anything stayed blank (listing the first ten offending labels and truncating the rest).
-
-### Compound label decomposition
-
-`describe.decompose_label` and `describe.decompose_labels` call a dedicated LLM agent with `output_type=LabelDecomposition`. The model decides whether a label names multiple cell types (doublets, mixed populations) and returns sanitized parts in lowercase. Semicolon-separated synonyms stay as one part. Results are cached per `run_id` under `user_files/decompositions/<run_id>/decompositions_<llmKey>.json`.
-
-Tune description batching by editing the constants at the top of `describe.py` or by passing `second_pass_wait_seconds` explicitly; the other values are module-level for now.
-
-### `CellDescription` schema
-
-| Field                | Type    | Notes                                                              |
-|----------------------|---------|--------------------------------------------------------------------|
-| `initialLabel`       | `str`   | Copied verbatim from the input, including any synonym list.        |
-| `descriptiveName`    | `str`   | One noun phrase, at most 12 words.                                 |
-| `function`           | `str`   | Up to 3 sentences, soft cap 60 words.                              |
-| `diseaseRelevance`   | `str`   | Up to 3 sentences, soft cap 60 words. `"Not established"` allowed. |
-| `developmentalStage` | `str`   | One sentence, soft cap 30 words. `"Not established"` allowed.      |
-
-`model_config = {"extra": "ignore"}` so legacy JSON files with extra fields (for example `markerGenes`) still deserialise, though the extra content is dropped.
-
-`CellDescription.to_sentence()` produces the flat text that is fed to the embedding model:
-
-```
-<initialLabel> is <descriptiveName>. Function: <function> Disease relevance: <diseaseRelevance> Developmental stage: <developmentalStage>
-```
-
-`CellDescription.blank(label)` returns a zeroed instance used as a fallback after an unrecoverable LLM failure.
-
-### `LabelDecomposition` schema
-
-| Field          | Type        | Notes |
-|----------------|-------------|-------|
-| `initialLabel` | `str`       | Input label, copied verbatim. |
-| `isCompound`   | `bool`      | `true` when the label names more than one cell type. |
-| `parts`        | `list[str]` | Sanitized cell-type parts (lowercased when compound). For non-compound labels, a single element equal to the label. |
-
-Used only for decomposition; descriptions are generated per part afterward.
-
-### PubMed tool
-
-`describe.get_pubmed_abstracts(query, max_results=5)` hits NCBI eutils, returns a `list[str]`, and swallows all errors (returning `[]`). `NCBI_API_KEY` raises the rate limit when set.
-
----
-
-## Embedding generation
-
-`embed.embed_texts(texts, EmbdConfig)`:
-
-- Dispatches to a per-provider URL and request body via `_PROVIDER_URL`, `_headers`, `_build_payload`, `_extract_embedding`.
-- Sends one request per text to avoid provider-side batch averaging.
-- Bounds concurrency with `asyncio.Semaphore(cfg.maxConcurrent)`.
-- Each request is retried up to 3 times with exponential backoff (`tenacity`).
-- Logs an initial `INFO` banner (`Embedding N texts (provider=..., model=..., concurrency=...)`) and then a progress line on a 5 percent stride (`Embedding progress: 13/260`).
-- Returns a `(N, D) float32` `numpy.ndarray` or `None` if any text failed after retries.
-
-Supported providers and URLs:
-
-| Provider     | Endpoint                                                                 |
-|--------------|--------------------------------------------------------------------------|
-| `deepinfra`  | `https://api.deepinfra.com/v1/openai/embeddings`                         |
-| `openrouter` | `https://openrouter.ai/api/v1/embeddings`                                |
-| `ollama`     | `http://localhost:11434/api/embed`                                       |
-| `openai`     | `https://api.openai.com/v1/embeddings`                                   |
-| `google`     | `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` |
-| `together`   | `https://api.together.xyz/v1/embeddings`                                 |
-
-Together AI also supports pydantic-ai for LLM calls via an OpenAI-compatible interface. See [docs.together.ai/docs/pydanticai](https://docs.together.ai/docs/pydanticai) if you want to drive the description agent through Together; it lives on the caller side and is orthogonal to the embedding provider above.
-
----
-
-## Storage
-
-Two NPZ layouts are in use.
-
-### Ontology NPZ (`storage.save_ontology_embeddings` / `load_ontology_embeddings`)
-
-Keys: `embeddings`, `ontology_ids`, `metadata`.
-
-`ontology_ids` is the array of CL ids, one per row of `embeddings`.
-
-### User NPZ (`storage.save_user_embeddings` / `load_user_embeddings`)
-
-Keys: `embeddings`, `labels`, `metadata`.
-
-`labels` holds the original user-provided labels, one per row. On load, the list is compared to the labels the caller wants. If they match exactly (same order and contents), the embeddings are reused; otherwise the file is treated as stale and a fresh generation is triggered.
-
-Files that lack the `labels` key (the legacy sidecar format) are rejected by `load_user_embeddings`. `CyteOnto.purge_stale()` deletes them.
-
-### Descriptions JSON (schema v3)
-
-```json
-{
-  "schemaVersion": "3.0",
-  "artifactKey": {
-    "provider": "together",
-    "model": "moonshotai/Kimi-K2.6",
-    "company": "moonshotai",
-    "modelName": "Kimi-K2.6"
-  },
-  "updatedAt": "2026-05-28T12:00:00+00:00",
-  "descriptions": {
-    "CL:0000001": {
-      "initialLabel": "...",
-      "descriptiveName": "...",
-      "function": "...",
-      "diseaseRelevance": "...",
-      "developmentalStage": "..."
-    }
-  }
-}
-```
-
-Legacy flat JSON files are not loaded. For ontology entries, keys under `descriptions` are CL ids; for user files, keys are the raw label strings passed to `compare`.
-
-### NPZ metadata (schema v3)
-
-`metadata` includes `schemaVersion`, `llm`, and `embedding` artifact key dicts (`provider`, `model`, `company`, `modelName`), plus `num_embeddings` and `embedding_dim`.
-
----
-
-## On-disk layout
-
-Set via `PathConfig(data_dir=..., user_dir=...)`:
-
-```
-<data_dir>/
-├── cell_ontology/
-│   ├── cell_to_cell_ontology.csv              shipped (original synonyms)
-│   ├── cell_to_cell_ontology_enriched.csv     shipped or built by setup.py
-│   └── cl.owl                                 shipped
-└── embedding/
-    ├── cell_ontology/
-    │   └── embeddings_<llmKey>_<embdKey>.npz
-    └── descriptions/
-        └── descriptions_<llmKey>.json
-
-<user_dir>/                             defaults to <data_dir>/user_files
-├── embeddings/
-│   └── <run_id>/
-│       ├── author/author_embeddings_<llmKey>_<embdKey>.npz
-│       └── algorithm/<algo_name>_embeddings_<llmKey>_<embdKey>.npz
-├── descriptions/
-│   └── <run_id>/
-│       ├── author/author_descriptions_<llmKey>.json
-│       └── algorithm/<algo_name>_descriptions_<llmKey>.json
-└── decompositions/
-    └── <run_id>/
-        └── decompositions_<llmKey>.json
-```
-
-`OntologyMapping` prefers the enriched CSV when it exists. That file keeps the original `label` column for display and adds `label_normalized` (lowercase) for lookup and ontology description inputs. Rows that share the same `(ontology_id, label_normalized)` after lowercasing are deduplicated (first kept).
-
-`uv run python cyteonto/setup.py` downloads the original CSV, OWL, primary ontology descriptions/embeddings (required), backup pair artifacts (optional; failures warn and continue), and the enriched CSV (optional; builds locally from the original if the CDN file is missing).
-
-Filename rules (`ModelArtifactKey.filename_segment`, `paths._clean_identifier`):
-
-- Artifact key segment: `{provider}_{company}-{modelName}` after sanitizing `/`, `:`, and spaces.
-  Example: provider `together`, model `moonshotai/Kimi-K2.6` → `together_moonshotai-Kimi-K2.6`.
-- Identifiers (`run_id`, algorithm keys) also replace `.` with `_`.
-  Example: `sample.run.001` becomes `sample_run_001`.
-
-Pre-v3 caches (`descriptions_moonshotai-Kimi-K2.6.json`, etc.) are ignored. Delete them or use a fresh `data_dir`, then rerun `from_config` or `uv run python cyteonto/setup.py`.
-
----
-
-## Caching rules
-
-| Artifact                          | Trigger for regeneration                                                |
-|-----------------------------------|-------------------------------------------------------------------------|
-| Ontology descriptions JSON        | File missing, any CL id missing from the JSON, any cached entry is blank, or `force_regenerate=True`. |
-| Ontology embeddings NPZ           | File missing, any description was regenerated on this call, or `force_regenerate=True`. |
-| User author/algorithm embeddings  | File missing, `labels` array inside the NPZ differs from the request, or any description for a requested label is missing or blank. |
-| User author/algorithm descriptions| Per-label: any label missing from the existing JSON or cached as blank is regenerated; non-blank existing entries are kept. |
-| Label decompositions JSON         | Per-label: any label missing from the JSON is decomposed via LLM; keyed by raw label string under `decompositions`. |
-
-Per-label description caching means that adding one new label to a run does not recompute descriptions for existing labels; only the new label hits the LLM.
-
-Blank descriptions (the fallback returned by `describe_cell` after an unrecoverable LLM failure) are never written to the JSON cache. On the next call, those labels are treated as missing and retried. The accompanying NPZ still covers them using the raw label text as the embedding input so the array stays aligned with the requested label list.
-
-When `use_cache=False` is passed to `compare`, all cache lookups are skipped and everything is regenerated.
-
-`force_regenerate=True` on `from_config` unlinks both the ontology NPZ and the ontology descriptions JSON before regenerating, so the description set stays in sync with the embedding set.
-
----
-
-## Error behavior
-
-- Empty embedding API key for a non-`ollama` provider: `CyteOnto.__init__` raises `ValueError`.
-- Core ontology files missing: `from_config` raises `FileNotFoundError`.
-- Ontology embedding generation failure: `from_config` raises `RuntimeError`.
-- User embedding generation failure: `compare` raises `RuntimeError` with the offending identifier.
-- Label length mismatch between author and algorithm lists: `compare` raises `ValueError`.
-- Invalid `compound_scoring`: `compare` raises `ValueError`.
-- Duplicate algorithm name or an algorithm named `"author"`: `compare` raises `ValueError`.
-- Ontology match below `min_match_similarity`: CL id stored as empty string, `similarity_method` becomes `partial_match` or `no_matches`.
-- Both labels empty on a pair: `similarity_method = empty`, ontology fields blank.
-- One label empty on a pair: non-empty side keeps its ontology id and name; score `0.0`; `similarity_method = empty`.
-- OWL class not found for a CL id during hierarchy metrics: falls back to `simple` similarity with a warning.
-- Per-label LLM failure: the label gets a blank `CellDescription` after 4 attempts and a second-pass retry; the run continues. The blank is not persisted to the descriptions JSON and will be retried on the next call. The corresponding embedding row is computed using the raw label text so the NPZ stays aligned with the requested label list.
-- Per-request embedding failure: the whole `embed_texts` call returns `None` after 3 tenacity retries, which surfaces as a `RuntimeError` from `_embed_user_labels`.
 
 ---
 
 ## Extending
 
-- **New provider**: add a URL to `_PROVIDER_URL` in `embed.py`, extend the `EmbdProvider` `Literal` in `models.py`, and adjust `_headers` / `_build_payload` / `_extract_embedding` if the request or response shape differs.
-- **New similarity metric**: implement a helper in `OntologySimilarity`, add a branch in `OntologySimilarity.similarity`, and update the table above.
-- **Alternative prompt**: edit `describe._build_prompt`. The existing prompt lists every `CellDescription` field with a soft length cap and a neutral tone; keep the same structure to avoid anchoring bias.
-- **Different ontology file**: pass a custom `data_dir`. The package expects `cl.owl` and `cell_to_cell_ontology.csv` under `<data_dir>/cell_ontology/`. Prefer also shipping or generating `cell_to_cell_ontology_enriched.csv` via `setup.py`.
-
----
-
-## Minimum dependency set
-
-Already declared in the project `pyproject.toml`:
-
-- `pydantic`, `pydantic-ai`
-- `aiohttp`, `tenacity`
-- `numpy`, `pandas`, `scikit-learn` (Hungarian assignment uses `scipy.optimize`, pulled in transitively)
-- `owlready2`
-- `loguru`, `python-dotenv`, `tqdm`
-- `requests` (PubMed tool)
+- **New embedding provider**: add its endpoint to `Config._PROVIDER_URL` and its API key variable to `Config.PROVIDER_API_KEY_ENV` in `config.py`, extend the `EmbdProvider` `Literal` in `models.py` (and in `modal_app/models.py` to accept it in the HTTP API), and adjust `_headers` / `_build_payload` / `_extract_embedding` in `embed.py` if the request or response shape differs. Add the provider to the table in `docs/source/guides/models-and-providers.md`; the tests compare `_PROVIDER_URL` with `EmbdProvider` and with that table.
+- **New similarity metric**: implement a helper in `OntologySimilarity`, add a branch in `OntologySimilarity.similarity`, and add the metric to the list in the `OntologySimilarity` docstring, to the `compare` docstring and to `docs/source/guides/similarity-metrics.md`.
+- **Alternative prompt**: edit `describe._build_prompt` for descriptions or `describe._build_decompose_prompt` for decompositions. The description prompt lists every `CellDescription` field with a soft length cap and a neutral tone, and embeds no examples to avoid anchoring; keep the same structure. Descriptions and decompositions are cached per model, not per prompt, so delete the cached ones after changing a prompt.
+- **Different ontology files**: pass a custom `data_dir` with `cell_ontology/cl.owl`, `cell_ontology/cell_to_cell_ontology.csv` and `cell_ontology/cell_to_cell_ontology_enriched.csv`. The enriched CSV adds a lowercase `label_normalized` column and drops duplicate `(ontology_id, label_normalized)` rows; `main()` in `setup.py` shows how it is built.

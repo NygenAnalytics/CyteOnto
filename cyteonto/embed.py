@@ -45,6 +45,10 @@ def _extract_embedding(result: dict[str, Any], cfg: EmbdConfig) -> list[float]:
             first = embd[0]
             return first.get("values", first) if isinstance(first, dict) else first
         return []
+    if cfg.provider == "ollama":
+        # Ollama's /api/embed returns one vector per input under "embeddings".
+        vectors = result.get("embeddings")
+        return vectors[0] if vectors else []
     data = result.get("data")
     if data:
         return data[0].get("embedding", [])

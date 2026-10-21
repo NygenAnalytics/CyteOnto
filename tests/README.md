@@ -2,8 +2,8 @@
 
 > Note: These tests are AI generated.
 
-Unit tests for the `cyteonto` package. They run offline; all network and LLM
-calls are mocked.
+Unit tests for the `cyteonto` package, the Modal service and the documentation
+tooling. They run offline; all network and LLM calls are mocked.
 
 ## Layout
 
@@ -19,8 +19,15 @@ tests/
 ├── test_embed.py          # Embedding HTTP helpers and orchestration
 ├── test_describe.py       # Prompt building and error formatting
 ├── test_pubmed.py         # PubMed abstract retrieval
-└── test_cyteonto.py       # Orchestrator units (decomposition, compound max/hungarian scoring, compare)
+├── test_cyteonto.py       # Orchestrator units (decomposition, compound max/hungarian scoring, compare)
+├── test_modal_status.py   # Status records of the Modal API and worker
+├── test_docs_structure.py # Documentation sources: navigation, links, documented fields and columns
+└── test_docs_render.py    # Documentation build in docs/ (needs the docs dependency group)
 ```
+
+The documentation tests skip what needs the `docs` dependency group when it is not
+installed; run them with `uv run --group docs pytest tests/test_docs_structure.py
+tests/test_docs_render.py`. See `docs/AGENTS.md`.
 
 ## Running
 

@@ -5,7 +5,7 @@ from typing import Any
 from dotenv import load_dotenv
 from pydantic import ValidationError
 from pydantic_ai import (
-    ModelHTTPError,
+    ModelAPIError,
     UnexpectedModelBehavior,
 )
 from pydantic_ai.usage import UsageLimits
@@ -49,7 +49,8 @@ class Config:
     PER_ATTEMPT_TIMEOUT = 120.0
 
     _RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
-        ModelHTTPError,
+        # Covers ModelHTTPError and the connection errors of the model's client.
+        ModelAPIError,
         UnexpectedModelBehavior,
         ValidationError,
         ConnectionError,
@@ -69,6 +70,7 @@ class Config:
         "google": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
         "together": "https://api.together.xyz/v1/embeddings",
         "nebius": "https://api.tokenfactory.nebius.com/v1/embeddings",
+        "fireworks": "https://api.fireworks.ai/inference/v1/embeddings",
     }
 
     RESULT_COLUMNS: list[str] = [

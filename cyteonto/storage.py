@@ -1,6 +1,8 @@
 """On-disk storage for embeddings (NPZ) and descriptions (JSON), schema v3."""
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,53 @@ def _default_meta(
     return meta
 
 
+def _savez_replacing(path: Path, **arrays: Any) -> None:
+    """Write an NPZ beside ``path`` and then move it over ``path``.
+
+    Readers of ``path`` see the old file or the new one, never a partial write.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            np.savez_compressed(f, **arrays)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def made_after_descriptions(metadata: dict[str, Any], desc_path: Path) -> bool:
+    """Whether an embeddings file was made after its descriptions last changed.
+
+    A file made before is stale, whichever embedding model made it, and is made
+    again instead of reused. Without a descriptions file, nothing makes it stale.
+    """
+    try:
+        with open(desc_path, "r", encoding="utf-8") as f:
+            updated = json.load(f)["updatedAt"]
+    except FileNotFoundError:
+        return True
+    except Exception:
+        return False
+    try:
+        made = datetime.fromisoformat(metadata["timestamp"])
+        return made >= datetime.fromisoformat(updated)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def load_embeddings_metadata(path: Path) -> dict[str, Any] | None:
+    """Return the metadata of an embeddings file without loading its arrays."""
+    if not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=True) as data:
+            return data["metadata"].item()
+    except Exception as e:
+        logger.error(f"Failed to read the metadata of {path}: {e}")
+        return None
+
+
 def save_ontology_embeddings(
     path: Path,
     embeddings: np.ndarray,
@@ -57,7 +106,7 @@ def save_ontology_embeddings(
                 "embedding_dim": int(embeddings.shape[1]) if len(embeddings) else 0,
             }
         )
-        np.savez_compressed(
+        _savez_replacing(
             path,
             embeddings=embeddings,
             ontology_ids=np.array(ontology_ids, dtype=object),
@@ -104,7 +153,7 @@ def save_user_embeddings(
                 "embedding_dim": int(embeddings.shape[1]) if len(embeddings) else 0,
             }
         )
-        np.savez_compressed(
+        _savez_replacing(
             path,
             embeddings=embeddings,
             labels=np.array(labels, dtype=object),

@@ -12,3 +12,7 @@ tmp/
 *.json
 cyteonto_results/
 dist/
+
+# Documentation builds. Running MyST directly in docs/source writes _build/ there.
+docs/build/
+docs/source/_build/

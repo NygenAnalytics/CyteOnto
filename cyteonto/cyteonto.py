@@ -11,7 +11,7 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import pandas as pd  # type: ignore
 from pydantic_ai import Agent
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment  # type: ignore
 from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
 from tqdm.auto import tqdm  # type: ignore
 
@@ -107,6 +107,42 @@ class CyteOnto:
         fallback_embedding: EmbdConfig | None = None,
         fallback_llm: LlmConfig | None = None,
     ) -> None:
+        """Set up paths and cache keys without loading the ontology or calling a model.
+
+        Args:
+            agent: pydantic-ai agent whose model describes cell types and splits
+                compound labels.
+            embedding: Embedding provider and model. When ``embedding.apiKey`` is
+                ``None``, the key is read from the provider's environment variable,
+                such as ``NEBIUS_API_KEY``, or else from ``EMBEDDING_MODEL_API_KEY``.
+            llm: Provider and model of ``agent``, which name the description caches.
+                ``llm.model`` must equal ``agent.model.model_name``.
+            data_dir: Directory with the Cell Ontology files and the ontology caches.
+                Defaults to the ``data`` directory inside the installed package.
+            user_dir: Directory for the caches of comparison runs. Defaults to
+                ``<data_dir>/user_files``.
+            max_description_concurrency: Maximum number of LLM requests that run at
+                the same time.
+            use_pubmed_tool: Let the agent search PubMed abstracts while it describes
+                a label.
+            reasoning: Leave the model's reasoning mode as the provider sets it. When
+                ``False``, the requests ask the provider to turn reasoning off.
+            fallback_agent: Agent that describes the labels whose description is
+                still blank after the primary agent's retries.
+            fallback_embedding: Embedding configuration to use when the primary
+                embedding provider fails, unless it equals ``embedding``. The
+                instance first loads the ontology embeddings of this model, or makes
+                them from the ontology descriptions, and then keeps embedding with
+                it. If that step fails, the call raises and the instance keeps the
+                primary model.
+            fallback_llm: Provider and model of ``fallback_agent``. It is reported in
+                ``model_pair_usage``; descriptions from the fallback agent are cached
+                under ``llm``.
+
+        Raises:
+            ValueError: If no embedding API key is found for a provider other than
+                ``ollama``, or if ``llm.model`` differs from the agent's model name.
+        """
         self.agent = agent
         self.embedding = embedding
         self.llm = llm
@@ -159,6 +195,19 @@ class CyteOnto:
         self._similarity: OntologySimilarity | None = None
         self._ontology_embeddings: np.ndarray | None = None
         self._ontology_ids: list[str] | None = None
+        # The embedding models whose ontology files force_regenerate deletes.
+        self._embd_keys = [self.embd_key]
+        if self.fallback_embedding is not None:
+            fallback_key = self.fallback_embedding.to_artifact_key()
+            if fallback_key != self.embd_key:
+                self._embd_keys.append(fallback_key)
+        self._embedding_switched = False
+        self._embedding_primary_used = False
+        # The parts of each label decomposed in the current compare call, which
+        # every side of the call reuses, so that a label is split the same way on
+        # each. A label whose decomposition failed keeps its cached split, or else
+        # maps to itself; it is then not cached, and the next call tries again.
+        self._call_decompositions: dict[str, list[str]] = {}
 
     def _record_llm_tier(self, used_fallback: bool) -> None:
         if not used_fallback:
@@ -204,23 +253,159 @@ class CyteOnto:
                 self._record_llm_tier(used_fallback=True)
         return descs, usage
 
+    def _record_embedding_tier(self) -> None:
+        """Record that labels were matched with embeddings of the current model."""
+        if not self._embedding_switched:
+            self._embedding_primary_used = True
+            return
+        self.model_pair_usage.embeddingTier = (
+            "mixed" if self._embedding_primary_used else "fallback"
+        )
+        self.model_pair_usage.embedding = self.embedding
+
     async def _embed_with_failover(self, texts: list[str]) -> np.ndarray | None:
         emb = await embed_texts(texts, self.embedding)
-        if emb is not None or self.fallback_embedding is None:
+        fallback = self.fallback_embedding
+        # A fallback equal to the current configuration would fail the same way.
+        if emb is not None or fallback is None or fallback == self.embedding:
             return emb
         logger.warning(
             f"Primary embedding failed (provider={self.embedding.provider}); "
-            f"trying fallback ({self.fallback_embedding.provider})"
+            f"trying fallback ({fallback.provider})"
         )
-        emb = await embed_texts(texts, self.fallback_embedding)
-        if emb is not None:
-            self.embd_key = self.fallback_embedding.to_artifact_key()
-            self.model_pair_usage.embeddingTier = "fallback"
-            self.model_pair_usage.embedding = self.fallback_embedding
-            self._similarity = None
-            self._ontology_embeddings = None
-            self._ontology_ids = None
+        emb = await embed_texts(texts, fallback)
+        if emb is None:
+            return None
+        # The labels are matched against ontology embeddings of the same model.
+        # Get them before switching, so that a failure keeps the primary.
+        ontology = await self._load_or_embed_ontology(fallback)
+        self._switch_embedding(fallback, ontology)
         return emb
+
+    def _switch_embedding(
+        self, embedding: EmbdConfig, ontology: tuple[np.ndarray, list[str]]
+    ) -> None:
+        """Embed with ``embedding`` from now on, and match against ``ontology``.
+
+        The labels, their cache files and the ontology embeddings they are matched
+        to then share a model.
+        """
+        self.embedding = embedding
+        self.embd_key = embedding.to_artifact_key()
+        self._embedding_switched = True
+        self._ontology_embeddings, self._ontology_ids = ontology
+        self._similarity = None
+
+    async def _load_or_embed_ontology(
+        self,
+        embedding: EmbdConfig,
+        descriptions: dict[str, CellDescription] | None = None,
+    ) -> tuple[np.ndarray, list[str]]:
+        """Load the ontology embeddings of ``embedding``, or create and save them.
+
+        After an embedding failover, labels are matched against the ontology
+        embeddings of the fallback model, which ``setup`` may not have downloaded.
+        They are made from ``descriptions``, or else from the ontology descriptions
+        on disk.
+        """
+        embd_key = embedding.to_artifact_key()
+        loaded = storage.load_ontology_embeddings(
+            self.paths.ontology_embeddings(self.llm_key, embd_key)
+        )
+        desc_path = self.paths.ontology_descriptions(self.llm_key)
+        if loaded is not None and storage.made_after_descriptions(loaded[2], desc_path):
+            return loaded[0], loaded[1]
+        if descriptions is None:
+            descriptions = storage.load_descriptions(
+                self.paths.ontology_descriptions(self.llm_key)
+            )
+            if descriptions is None:
+                raise FileNotFoundError(
+                    f"No ontology descriptions for {self.llm.model} to embed with "
+                    f"{embedding.model}. Run CyteOnto.from_config(...) first."
+                )
+        ids, texts = self._ontology_texts(descriptions)
+        logger.warning(
+            f"Embedding the {len(ids)} ontology descriptions with {embedding.model} "
+            f"({embedding.provider}) for the first time"
+        )
+        embeddings = await embed_texts(texts, embedding)
+        if embeddings is None:
+            raise RuntimeError(
+                f"Failed to embed the ontology descriptions with {embedding.model}"
+            )
+        self._save_ontology_embeddings(embd_key, embeddings, ids)
+        return embeddings, ids
+
+    def _save_ontology_embeddings(
+        self, embd_key: ModelArtifactKey, embeddings: np.ndarray, ids: list[str]
+    ) -> None:
+        path = self.paths.ontology_embeddings(self.llm_key, embd_key)
+        saved = storage.save_ontology_embeddings(
+            path,
+            embeddings,
+            ids,
+            self.llm_key,
+            embd_key,
+            extra_metadata={"reasoning": self.reasoning},
+        )
+        if not saved:
+            raise RuntimeError(f"Failed to save the ontology embeddings to {path}")
+
+    def _ontology_texts(
+        self, descriptions: dict[str, CellDescription]
+    ) -> tuple[list[str], list[str]]:
+        """Return the ontology IDs and the text to embed for each of them."""
+        if not self.mapping.load():
+            raise RuntimeError("Failed to load ontology CSV mapping")
+        ids, joined_labels = self.mapping.ids_and_joined_labels()
+
+        # Embed every id. Use the joined label as a last-resort fallback when
+        # a description is still blank so the array stays aligned with `ids`.
+        # Such ids are not cached in the JSON; from_config(...) describes them
+        # again and embeds the terms of its model pair again.
+        texts: list[str] = []
+        fallback_count = 0
+        for oid, lbl in zip(ids, joined_labels):
+            desc = descriptions.get(oid)
+            if desc is not None and not desc.is_blank():
+                texts.append(desc.to_sentence())
+            else:
+                texts.append(lbl)
+                fallback_count += 1
+        if fallback_count:
+            logger.warning(
+                f"{fallback_count} ontology terms have no description. Embedding "
+                "them with the label text as a fallback; the next "
+                "CyteOnto.from_config(...) describes them again."
+            )
+        return ids, texts
+
+    async def _embed_ontology(self, descriptions: dict[str, CellDescription]) -> None:
+        """Embed every ontology term and save the embeddings of the model pair.
+
+        If the primary model fails and one request to the fallback model succeeds,
+        the instance switches to the ontology embeddings of the fallback model, which
+        are made first if they are missing.
+        """
+        ids, texts = self._ontology_texts(descriptions)
+        embeddings = await embed_texts(texts, self.embedding)
+        if embeddings is not None:
+            self._save_ontology_embeddings(self.embd_key, embeddings, ids)
+            return
+        fallback = self.fallback_embedding
+        if fallback is None or fallback == self.embedding:
+            raise RuntimeError("Failed to generate ontology embeddings")
+        logger.warning(
+            f"Primary embedding failed (provider={self.embedding.provider}); "
+            f"using the ontology embeddings of the fallback ({fallback.provider})"
+        )
+        # Those may be loaded without a request, so check that the fallback works
+        # before switching to it for good.
+        if await embed_texts(texts[:1], fallback) is None:
+            raise RuntimeError("Failed to generate ontology embeddings")
+        ontology = await self._load_or_embed_ontology(fallback, descriptions)
+        self._switch_embedding(fallback, ontology)
 
     # factory + setup
 
@@ -240,9 +425,33 @@ class CyteOnto:
         fallback_embedding: EmbdConfig | None = None,
         fallback_llm: LlmConfig | None = None,
     ) -> "CyteOnto":
-        """Build a ``CyteOnto`` and make sure the ontology embeddings are on disk.
+        """Create a ``CyteOnto`` and make sure the ontology embeddings are on disk.
 
-        Generates descriptions and embeddings for every CL term if missing.
+        Takes the arguments of ``CyteOnto`` and ``force_regenerate``. Loads the
+        descriptions of the Cell Ontology terms for ``llm`` from ``data_dir`` and
+        checks that the term embeddings for ``llm`` and ``embedding`` exist. Terms
+        without a description are described with ``agent``, and ``fallback_agent``
+        if given, and then every term is embedded again. When every term has a
+        description and the embeddings file was made after the descriptions last
+        changed, no model is called. If
+        ``embedding`` fails to embed the terms, the instance checks that
+        ``fallback_embedding`` works and switches to it and its ontology embeddings,
+        which are made if they are missing.
+
+        Args:
+            force_regenerate: Delete the ontology descriptions of ``llm``, which all
+                model pairs with this LLM share, and their embeddings with
+                ``embedding`` and ``fallback_embedding`` first. The descriptions and
+                the embeddings with ``embedding`` are then made again for every term,
+                and those with ``fallback_embedding`` at the next failover.
+
+        Raises:
+            ValueError: For the same reasons as the constructor.
+            FileNotFoundError: If ``cell_to_cell_ontology.csv``,
+                ``cell_to_cell_ontology_enriched.csv`` or ``cl.owl`` is missing from
+                ``<data_dir>/cell_ontology``.
+            RuntimeError: If the ontology CSV cannot be read, or the term
+                embeddings cannot be made or saved.
         """
         self = cls(
             agent=agent,
@@ -268,9 +477,12 @@ class CyteOnto:
 
         emb_path = self.paths.ontology_embeddings(self.llm_key, self.embd_key)
         desc_path = self.paths.ontology_descriptions(self.llm_key)
+        emb_paths = [
+            self.paths.ontology_embeddings(self.llm_key, key) for key in self._embd_keys
+        ]
 
         if force_regenerate:
-            for p in (emb_path, desc_path):
+            for p in (*emb_paths, desc_path):
                 if p.exists():
                     logger.info(f"force_regenerate: removing {p}")
                     p.unlink()
@@ -288,9 +500,15 @@ class CyteOnto:
 
         missing_indices = [i for i, oid in enumerate(ids) if oid not in existing]
 
-        if not missing_indices and emb_path.exists():
+        metadata = storage.load_embeddings_metadata(emb_path)
+        current = metadata is not None and storage.made_after_descriptions(
+            metadata, desc_path
+        )
+        if not missing_indices and current:
             logger.info(f"Ontology embeddings already present at {emb_path}")
             return
+        if metadata is not None and not current:
+            logger.info(f"Ontology embeddings at {emb_path} predate the descriptions")
 
         if missing_indices:
             missing_labels = [joined_labels[i] for i in missing_indices]
@@ -301,44 +519,18 @@ class CyteOnto:
             )
             desc_list, sub_usage = await self._describe_labels(missing_labels)
             self.usage.merge(sub_usage)
-            for oid, desc in zip(missing_ids, desc_list):
-                if not desc.is_blank():
-                    existing[oid] = desc
-            storage.save_descriptions(desc_path, existing, self.llm_key)
+            described = {
+                oid: desc
+                for oid, desc in zip(missing_ids, desc_list)
+                if not desc.is_blank()
+            }
+            if described:
+                # Embedding files made before this are now stale for every model.
+                # They stay on disk until new ones replace them.
+                existing.update(described)
+                storage.save_descriptions(desc_path, existing, self.llm_key)
 
-        # Embed every id. Use the joined label as a last-resort fallback when
-        # a description is still blank so the array stays aligned with `ids`.
-        # Such ids are not cached in the JSON and will be retried next run,
-        # which will then overwrite the NPZ.
-        texts: list[str] = []
-        fallback_count = 0
-        for oid, lbl in zip(ids, joined_labels):
-            desc = existing.get(oid, CellDescription.blank(label=lbl))
-            if desc is not None and not desc.is_blank():
-                texts.append(desc.to_sentence())
-            else:
-                texts.append(lbl)
-                fallback_count += 1
-        if fallback_count:
-            logger.warning(
-                f"{fallback_count} ontology terms have no description after "
-                "retries. Embedding them with the label text as a fallback; "
-                "they will be retried on the next CyteOnto.from_config(...)."
-            )
-
-        embeddings = await self._embed_with_failover(texts)
-        if embeddings is None:
-            raise RuntimeError("Failed to generate ontology embeddings")
-
-        emb_path = self.paths.ontology_embeddings(self.llm_key, self.embd_key)
-        storage.save_ontology_embeddings(
-            emb_path,
-            embeddings,
-            ids,
-            self.llm_key,
-            self.embd_key,
-            extra_metadata={"reasoning": self.reasoning},
-        )
+        await self._embed_ontology(existing)
 
     # lazy loaders
 
@@ -379,21 +571,31 @@ class CyteOnto:
         )
         desc_path = self.paths.user_descriptions(run_id, kind, identifier, self.llm_key)
 
-        raw_existing = storage.load_descriptions(desc_path) if use_cache else None
-        # Drop any pre-existing blank entries so they are retried below.
-        existing: dict[str, CellDescription] = {
-            lbl: d for lbl, d in (raw_existing or {}).items() if not d.is_blank()
+        # Read the file even when use_cache is False, so that rewriting it keeps
+        # the descriptions that this call does not replace. Drop any pre-existing
+        # blank entries so they are retried below.
+        stored: dict[str, CellDescription] = {
+            lbl: d
+            for lbl, d in (storage.load_descriptions(desc_path) or {}).items()
+            if not d.is_blank()
         }
+        existing = dict(stored) if use_cache else {}
 
         all_real = use_cache and all(
             _is_empty(lbl) or lbl in existing for lbl in labels
         )
         if all_real:
             cached = storage.load_user_embeddings(emb_path)
-            if cached is not None and cached[1] == labels:
+            if (
+                cached is not None
+                and cached[1] == labels
+                and storage.made_after_descriptions(cached[2], desc_path)
+            ):
                 logger.info(
                     f"Reusing cached embeddings for '{identifier}' ({len(labels)} labels)"
                 )
+                if labels:
+                    self._record_embedding_tier()
                 return cached[0]
 
         unique_labels = list(dict.fromkeys(labels))
@@ -408,10 +610,17 @@ class CyteOnto:
             )
             new_descs, sub_usage = await self._describe_labels(missing)
             self.usage.merge(sub_usage)
-            for lbl, desc in zip(missing, new_descs):
-                if not desc.is_blank():
-                    existing[lbl] = desc
-            storage.save_descriptions(desc_path, existing, self.llm_key)
+            described = {
+                lbl: desc
+                for lbl, desc in zip(missing, new_descs)
+                if not desc.is_blank()
+            }
+            # A label that gets no new description keeps its cached one, which is
+            # embedded below, so that the file matches the embeddings.
+            existing = {**stored, **described}
+            if described:
+                # Embedding files made before this are now stale for every model.
+                storage.save_descriptions(desc_path, existing, self.llm_key)
 
         # Build the text to embed for every label position. Empty labels are
         # skipped entirely (no description, no embedding) and get a zero
@@ -454,12 +663,15 @@ class CyteOnto:
             )
 
         if unique_texts:
-            unique_embeddings = await self._embed_with_failover(unique_texts)
-            if unique_embeddings is None:
+            embedded = await self._embed_with_failover(unique_texts)
+            if embedded is None:
                 raise RuntimeError(f"Failed to embed labels for '{identifier}'")
-            dim = unique_embeddings.shape[1]
+            self._record_embedding_tier()
+            unique_embeddings = embedded
         else:
-            dim = self._load_ontology_embeddings()[0].shape[1]
+            onto_dim = self._load_ontology_embeddings()[0].shape[1]
+            unique_embeddings = np.zeros((0, onto_dim), dtype=np.float32)
+        dim = unique_embeddings.shape[1]
 
         emb_path = self.paths.user_embeddings(
             run_id, kind, identifier, self.llm_key, self.embd_key
@@ -492,9 +704,12 @@ class CyteOnto:
         min_similarity: float = 0.1,
         # labels: list[str] | None = None
     ) -> list[tuple[str | None, float]]:
-        onto_emb, onto_ids = self._load_ontology_embeddings()
         if query_embeddings.ndim == 1:
             query_embeddings = query_embeddings.reshape(1, -1)
+        # A side whose labels are all empty has no embeddings to match.
+        if len(query_embeddings) == 0:
+            return []
+        onto_emb, onto_ids = self._load_ontology_embeddings()
         sims = cosine_similarity(query_embeddings, onto_emb)
         out: list[tuple[str | None, float]] = []
         for i, row in enumerate(sims):
@@ -570,14 +785,18 @@ class CyteOnto:
             / _clean_identifier(run_id)
             / f"decompositions_{artifact_key_segment(self.llm_key)}.json"
         )
-        cached: dict[str, list[str]] = {}
-        if use_cache and cache_path.exists():
+        # Read the file even when use_cache is False, so that rewriting it keeps
+        # the labels of the run that this call does not decompose.
+        stored: dict[str, list[str]] = {}
+        if cache_path.exists():
             try:
                 raw = json.loads(cache_path.read_text(encoding="utf-8"))
                 if raw.get("schemaVersion") == config.SCHEMA_VERSION:
-                    cached = raw.get("decompositions", {})
+                    stored = raw.get("decompositions", {})
             except Exception as e:
                 logger.warning(f"Failed to load decompositions from {cache_path}: {e}")
+        cached = dict(stored) if use_cache else {}
+        cached.update(self._call_decompositions)
 
         missing = [lbl for lbl in unique if lbl not in cached]
         if missing:
@@ -589,21 +808,27 @@ class CyteOnto:
                 reasoning=self.reasoning,
             )
             self.usage.merge(sub_usage)
+            # A decomposition without parts failed. Its label keeps its cached split,
+            # or else stays whole for this call and is retried by the next one.
             for dec in decomps:
-                parts = dec.parts if dec.parts else [dec.initialLabel]
-                cached[dec.initialLabel] = parts
-
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            envelope = {
-                "schemaVersion": config.SCHEMA_VERSION,
-                "artifactKey": self.llm_key.model_dump(mode="json"),
-                "updatedAt": datetime.now(timezone.utc).isoformat(),
-                "decompositions": cached,
-            }
-            cache_path.write_text(
-                json.dumps(envelope, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+                self._call_decompositions[dec.initialLabel] = (
+                    dec.parts or stored.get(dec.initialLabel) or [dec.initialLabel]
+                )
+            cached.update(self._call_decompositions)
+            decomposed = {dec.initialLabel: dec.parts for dec in decomps if dec.parts}
+            if decomposed:
+                stored.update(decomposed)
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                envelope = {
+                    "schemaVersion": config.SCHEMA_VERSION,
+                    "artifactKey": self.llm_key.model_dump(mode="json"),
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    "decompositions": stored,
+                }
+                cache_path.write_text(
+                    json.dumps(envelope, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
 
         return {lbl: cached.get(lbl, [lbl]) for lbl in unique}
 
@@ -621,24 +846,38 @@ class CyteOnto:
         use_cache: bool = True,
         compound_scoring: Literal["max", "hungarian_mean"] = "max",
     ) -> pd.DataFrame:
-        """Compare author labels with one or more algorithm label sets.
+        """Compare author labels with the labels of one or more algorithms.
+
+        Labels are lowercased, compound labels are split into cell types, and each
+        label or part is described, embedded and matched to its closest Cell
+        Ontology term. Each author label is then scored against the algorithm label
+        at the same position.
 
         Args:
-            author_labels: Reference labels. One entry per item.
+            author_labels: Reference labels, one per item, such as a cell or a
+                cluster.
             algorithms: Mapping ``{algo_name: labels}`` (or sequence of pairs).
                 Each label list must be the same length as ``author_labels``.
-                Algorithm names must be unique.
+                Algorithm names must be unique, and ``"author"`` is reserved.
             run_id: Unique identifier for this comparison. Used to namespace
                 user caches on disk and to tag each result row. Reuse the same
                 ``run_id`` across calls to benefit from caching; pass it to
-                ``clear_run`` to delete the artifacts. If ``None``, an
-                auto-generated UUID is used and logged.
-            metric: Similarity metric; see ``OntologySimilarity`` for the list.
-            metric_params: Optional per-metric parameters (e.g. Gaussian hill width).
-            min_match_similarity: Threshold below which a user label is considered
-                unmatched against the ontology.
-            use_cache: When ``True``, reuse on-disk embeddings and descriptions if
-                the labels match.
+                ``clear_run`` to delete the descriptions and embeddings. If ``None``,
+                an id of the form ``run-<uuid4>`` is generated and logged.
+            metric: Similarity metric for each pair of matched terms:
+                ``cosine_kernel``, ``cosine_direct``, ``path``, ``set:jaccard``,
+                ``set:cosine``, ``set:weighted_jaccard``,
+                ``weighted:num_ancestors``, ``weighted:specificity``,
+                ``weighted:embedding_cosine`` or ``simple``. Other names fall back
+                to ``simple``.
+            metric_params: Parameters of ``cosine_kernel``: the ``center``,
+                ``width`` and ``amplitude`` of its Gaussian. Other metrics ignore
+                them.
+            min_match_similarity: Lowest cosine similarity between a label and its
+                closest Cell Ontology term at which the label counts as matched.
+            use_cache: When ``True``, reuse the label decompositions, descriptions
+                and embeddings saved for ``run_id``. When ``False``, generate them
+                again.
             compound_scoring: How to reduce the m×n part score matrix for compound
                 pairs. ``"max"`` takes the maximum entry; ``"hungarian_mean"`` uses
                 Hungarian assignment mean with a coverage penalty when m != n.
@@ -647,6 +886,18 @@ class CyteOnto:
             DataFrame with one row per (algorithm, pair_index) combination. The
             ``run_id`` column is populated with the id used for this call (the
             caller-provided value or the auto-generated UUID).
+
+        Raises:
+            ValueError: If ``compound_scoring`` is invalid, ``algorithms`` is empty,
+                an algorithm name is repeated or is ``"author"``, or a label list
+                differs in length from ``author_labels``.
+            RuntimeError: If labels cannot be embedded, or, at an embedding
+                failover, the ontology embeddings of the fallback model cannot be
+                made or saved; the instance then keeps the primary model.
+            FileNotFoundError: If the ontology embeddings of the model pair are
+                missing, or, at an embedding failover, both those of the fallback
+                model and the ontology descriptions to make them from. Run
+                ``from_config`` first.
         """
         if compound_scoring not in ("max", "hungarian_mean"):
             raise ValueError(
@@ -695,20 +946,50 @@ class CyteOnto:
         # Compound labels (e.g. "AT2 cell–plasma cell doublet") embed poorly as one
         # string and often score near zero. Decompose each label into cell-type parts
         # via LLM, then embed and match each part separately.
-        author_parts_map = await self._resolve_label_parts(
-            author_labels, run_id, use_cache
-        )
-        author_parts_list = _unique_parts(author_labels, author_parts_map)
-        author_emb = await self._embed_user_labels(
-            labels=author_parts_list,
-            run_id=run_id,
-            kind="author",
-            identifier="author",
-            use_cache=use_cache,
-        )
+        self._call_decompositions = {}
+        primary_used = self._embedding_primary_used
+        # Every side is embedded before any is matched. Its parts and embeddings, with
+        # the model that made them, are keyed by "author" or the algorithm name.
+        parts: dict[str, tuple[dict[str, list[str]], list[str]]] = {}
+        embedded: dict[str, tuple[np.ndarray, ModelArtifactKey]] = {}
 
+        async def embed_side(identifier: str, cached: bool) -> None:
+            emb = await self._embed_user_labels(
+                labels=parts[identifier][1],
+                run_id=run_id,
+                kind="author" if identifier == "author" else "algorithm",
+                identifier=identifier,
+                use_cache=cached,
+            )
+            embedded[identifier] = (emb, self.embd_key)
+
+        sides = [("author", author_labels)]
+        for algo_name, algo_labels in algo_items:
+            if len(algo_labels) != len(author_labels):
+                raise ValueError(
+                    f"Label length mismatch for '{algo_name}': "
+                    f"{len(algo_labels)} vs {len(author_labels)} author labels"
+                )
+            sides.append((algo_name, algo_labels))
+        for identifier, labels in tqdm(sides, desc="Embedding labels"):
+            parts_map = await self._resolve_label_parts(labels, run_id, use_cache)
+            parts[identifier] = (parts_map, _unique_parts(labels, parts_map))
+            await embed_side(identifier, cached=use_cache)
+
+        # An embedding failover partway through switches the instance to the
+        # fallback model and its ontology embeddings. The sides embedded before it
+        # are embedded again with that model, so that every label of the call is
+        # matched and scored with one model. Their descriptions were saved above.
+        stale = [side for side, (_, key) in embedded.items() if key != self.embd_key]
+        if stale:
+            # The primary model's embeddings of this call are no longer matched.
+            self._embedding_primary_used = primary_used
+        for identifier in stale:
+            await embed_side(identifier, cached=True)
+
+        author_parts_map, author_parts_list = parts["author"]
         author_matches = self._match(
-            author_emb,
+            embedded["author"][0],
             min_similarity=min_match_similarity,
             # labels=author_parts_list
         )
@@ -717,26 +998,10 @@ class CyteOnto:
         similarity = self._ensure_similarity()
 
         rows: list[dict[str, Any]] = []
-        for algo_name, algo_labels in tqdm(algo_items, desc="Comparing algorithms"):
-            if len(algo_labels) != len(author_labels):
-                raise ValueError(
-                    f"Label length mismatch for '{algo_name}': "
-                    f"{len(algo_labels)} vs {len(author_labels)} author labels"
-                )
-
-            algo_parts_map = await self._resolve_label_parts(
-                algo_labels, run_id, use_cache
-            )
-            algo_parts_list = _unique_parts(algo_labels, algo_parts_map)
-            algo_emb = await self._embed_user_labels(
-                labels=algo_parts_list,
-                run_id=run_id,
-                kind="algorithm",
-                identifier=algo_name,
-                use_cache=use_cache,
-            )
+        for algo_name, algo_labels in algo_items:
+            algo_parts_map, algo_parts_list = parts[algo_name]
             algo_matches = self._match(
-                algo_emb,
+                embedded[algo_name][0],
                 min_similarity=min_match_similarity,
                 # labels=algo_parts_list
             )
@@ -846,15 +1111,11 @@ class CyteOnto:
                     self._ontology_name_for_id(oid) if oid else "" for oid in g_ids
                 )
                 if len(a_parts) > 1:
-                    a_emb_out: str | float = ";".join(
-                        str(round(s, 4)) for s in a_part_sims
-                    )
+                    a_emb_out = ";".join(str(round(s, 4)) for s in a_part_sims)
                 else:
                     a_emb_out = round(a_part_sims[0], 4)
                 if len(g_parts) > 1:
-                    g_emb_out: str | float = ";".join(
-                        str(round(s, 4)) for s in g_part_sims
-                    )
+                    g_emb_out = ";".join(str(round(s, 4)) for s in g_part_sims)
                 else:
                     g_emb_out = round(g_part_sims[0], 4)
 
@@ -931,13 +1192,44 @@ class CyteOnto:
         algorithm_names: list[str] | None = None,
         metric: str = "cosine_kernel",
         metric_params: dict[str, Any] | None = None,
+        min_match_similarity: float = 0.1,
         use_cache: bool = True,
         compound_scoring: Literal["max", "hungarian_mean"] = "max",
     ) -> pd.DataFrame:
         """Pull algorithm labels out of ``adata.obs`` and delegate to ``compare``.
 
-        ``run_id`` has the same semantics as in ``compare``: pass one to reuse
-        caches or ``None`` to let the call auto-generate and log a UUID.
+        Each column in ``target_columns`` becomes one algorithm. Its values are
+        converted to strings, so missing values become labels such as ``"nan"``.
+
+        Args:
+            author_labels: Reference labels, one per row of ``adata.obs``.
+            anndata_objects: AnnData objects to read the columns from, each with one
+                row per author label. An object without ``author_column`` in ``obs``
+                is skipped with a warning. With several objects, each algorithm name
+                ends with the position of its object, such as ``pred_0`` and
+                ``pred_1``.
+            target_columns: Columns of ``adata.obs`` with the algorithm labels. A
+                missing column is skipped with a warning.
+            author_column: Column that each object must have in ``obs``. Only its
+                presence is checked; the author labels come from
+                ``author_labels``.
+            run_id: As in ``compare``: pass one to reuse caches, or ``None`` to
+                let the call generate and log one.
+            algorithm_names: Names of the algorithms in the results, one per
+                target column. Defaults to the column names.
+            metric: As in ``compare``.
+            metric_params: As in ``compare``.
+            min_match_similarity: As in ``compare``.
+            use_cache: As in ``compare``.
+            compound_scoring: As in ``compare``.
+
+        Returns:
+            The DataFrame that ``compare`` returns.
+
+        Raises:
+            ValueError: If ``algorithm_names`` and ``target_columns`` differ in
+                length, or for the reasons that ``compare`` raises it, such as an
+                object whose number of rows differs from ``author_labels``.
         """
         names = algorithm_names or list(target_columns)
         if len(names) != len(target_columns):
@@ -947,8 +1239,11 @@ class CyteOnto:
             lbl.lower() if not _is_empty(lbl) else lbl for lbl in author_labels
         ]
 
+        # Algorithm names must be unique, so with several objects each name gets the
+        # position of its object in anndata_objects.
+        several = len(anndata_objects) > 1
         collected: list[tuple[str, list[str]]] = []
-        for adata in anndata_objects:
+        for i, adata in enumerate(anndata_objects):
             if author_column not in adata.obs:
                 logger.warning(
                     f"Author column '{author_column}' missing from AnnData; skipping"
@@ -961,7 +1256,7 @@ class CyteOnto:
                 algo_labels = adata.obs[col].astype(str).tolist()
                 collected.append(
                     (
-                        name,
+                        f"{name}_{i}" if several else name,
                         [
                             lbl.lower() if not _is_empty(lbl) else lbl
                             for lbl in algo_labels
@@ -975,6 +1270,7 @@ class CyteOnto:
             run_id=run_id,
             metric=metric,
             metric_params=metric_params,
+            min_match_similarity=min_match_similarity,
             use_cache=use_cache,
             compound_scoring=compound_scoring,
         )
@@ -987,6 +1283,11 @@ class CyteOnto:
         Args:
             run_id: If given, restrict stats to that run. Otherwise aggregates
                 across all runs under ``user_dir/embeddings``.
+
+        Returns:
+            A dict with ``root`` (the directory searched), ``total_files`` (the
+            number of NPZ files), ``total_size_mb`` and ``stale_files`` (NPZ files
+            that cannot be loaded, such as files without inline labels).
         """
         root = self.paths.user_dir / "embeddings"
         if run_id:
@@ -1015,15 +1316,22 @@ class CyteOnto:
     ) -> int:
         """Delete user embeddings and descriptions for a run.
 
+        The label decompositions of the run are kept.
+
         Args:
             run_id: The run identifier used in ``compare(...)``.
             kind: ``"author"`` or ``"algorithm"``. If omitted, all kinds under
                 ``run_id`` are removed.
             identifier: When ``kind`` is given, restrict to a single identifier
-                (e.g. one algorithm name). Ignored if ``kind`` is ``None``.
+                (e.g. one algorithm name) and to the files of the current model
+                pair. Ignored if ``kind`` is ``None``.
 
         Returns:
             Number of files removed.
+
+        Raises:
+            ValueError: If ``kind`` is not ``"author"``, ``"algorithm"`` or
+                ``None``.
         """
         if kind not in (None, "author", "algorithm"):
             raise ValueError("kind must be 'author', 'algorithm', or None")
@@ -1058,7 +1366,16 @@ class CyteOnto:
         return removed
 
     def purge_stale(self, run_id: str | None = None) -> int:
-        """Delete user NPZ files that are missing the inline labels (stale format)."""
+        """Delete user NPZ files that cannot be loaded (such as the stale format).
+
+        Files in the stale format lack the inline labels.
+
+        Args:
+            run_id: If given, only delete files of that run.
+
+        Returns:
+            Number of files removed.
+        """
         root = self.paths.user_dir / "embeddings"
         if run_id:
             root = root / _clean_identifier(run_id)
