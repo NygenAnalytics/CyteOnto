@@ -1203,8 +1203,11 @@ class CyteOnto:
 
         Args:
             author_labels: Reference labels, one per row of ``adata.obs``.
-            anndata_objects: AnnData objects to read the columns from. An object
-                without ``author_column`` in ``obs`` is skipped with a warning.
+            anndata_objects: AnnData objects to read the columns from, each with one
+                row per author label. An object without ``author_column`` in ``obs``
+                is skipped with a warning. With several objects, each algorithm name
+                ends with the position of its object, such as ``pred_0`` and
+                ``pred_1``.
             target_columns: Columns of ``adata.obs`` with the algorithm labels. A
                 missing column is skipped with a warning.
             author_column: Column that each object must have in ``obs``. Only its
@@ -1225,9 +1228,8 @@ class CyteOnto:
 
         Raises:
             ValueError: If ``algorithm_names`` and ``target_columns`` differ in
-                length, or for the reasons that ``compare`` raises it. Each object
-                adds the same algorithm names, so several objects with the target
-                columns raise it as duplicate names.
+                length, or for the reasons that ``compare`` raises it, such as an
+                object whose number of rows differs from ``author_labels``.
         """
         names = algorithm_names or list(target_columns)
         if len(names) != len(target_columns):
@@ -1237,8 +1239,11 @@ class CyteOnto:
             lbl.lower() if not _is_empty(lbl) else lbl for lbl in author_labels
         ]
 
+        # Algorithm names must be unique, so with several objects each name gets the
+        # position of its object in anndata_objects.
+        several = len(anndata_objects) > 1
         collected: list[tuple[str, list[str]]] = []
-        for adata in anndata_objects:
+        for i, adata in enumerate(anndata_objects):
             if author_column not in adata.obs:
                 logger.warning(
                     f"Author column '{author_column}' missing from AnnData; skipping"
@@ -1251,7 +1256,7 @@ class CyteOnto:
                 algo_labels = adata.obs[col].astype(str).tolist()
                 collected.append(
                     (
-                        name,
+                        f"{name}_{i}" if several else name,
                         [
                             lbl.lower() if not _is_empty(lbl) else lbl
                             for lbl in algo_labels

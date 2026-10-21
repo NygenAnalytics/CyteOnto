@@ -38,9 +38,10 @@ The results have one row per cell and algorithm. The models are called per disti
 label, not per cell: once for each distinct label of the author labels and of each
 algorithm. So a large dataset costs as much as its number of distinct labels.
 
-Pass one AnnData object per call. Each object adds the same algorithm names, so with
-two objects that both have the target columns, `compare()` raises a `ValueError` for
-the repeated names.
+With several AnnData objects, each must have one row per author label, in the same
+order. Each object's columns are compared as algorithms of their own, whose names end
+with the position of the object in `anndata_objects`, such as `method_a_0` and
+`method_a_1`.
 
 ## Compare each combination of labels once
 

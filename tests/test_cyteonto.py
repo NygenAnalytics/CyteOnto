@@ -1578,3 +1578,129 @@ class TestCompareAnndata:
         assert kwargs["author_labels"] == ["t cell"]
         assert kwargs["algorithms"] == [("pred", ["b cell"])]
         assert kwargs["min_match_similarity"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_several_objects_name_each_algorithm_by_its_object(self):
+        import anndata as ad  # type: ignore
+        import pandas as pd  # type: ignore
+
+        inst = object.__new__(CyteOnto)
+        inst.compare = AsyncMock(return_value="results")
+        objects = [
+            ad.AnnData(obs=pd.DataFrame({"pred": ["T cell"]}, index=["c1"])),
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell"], "pred": ["B cell"]}, index=["c1"]
+                )
+            ),
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell"], "pred": ["NK cell"]}, index=["c1"]
+                )
+            ),
+        ]
+
+        await inst.compare_anndata(
+            author_labels=["T cell"],
+            anndata_objects=objects,
+            target_columns=["pred"],
+            author_column="author",
+            run_id="run",
+        )
+
+        # The first object has no author column and is skipped.
+        assert inst.compare.await_args.kwargs["algorithms"] == [
+            ("pred_1", ["b cell"]),
+            ("pred_2", ["nk cell"]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_several_objects_are_compared_with_the_author_labels(self, tmp_path):
+        import anndata as ad  # type: ignore
+        import pandas as pd  # type: ignore
+
+        inst = _instance(tmp_path)
+        _describe_terms(inst)
+        _save_ontology_embeddings(inst, inst.embedding)
+        index = ["c1", "c2"]
+        objects = [
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell", "B cell"], "pred": ["T cell", "B cell"]},
+                    index=index,
+                )
+            ),
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell", "B cell"], "pred": ["B cell", "B cell"]},
+                    index=index,
+                )
+            ),
+        ]
+        calls: list[tuple[str, int]] = []
+        decompose = AsyncMock(
+            side_effect=lambda **kw: (
+                [LabelDecomposition.single(label) for label in kw["labels"]],
+                AgentUsage(),
+            )
+        )
+        with (
+            patch("cyteonto.cyteonto.describe_cells", _describe_mock()),
+            patch("cyteonto.cyteonto.decompose_labels", decompose),
+            patch("cyteonto.cyteonto.embed_texts", _embedder(calls, lambda *a: False)),
+            patch("cyteonto.cyteonto.OntologySimilarity", _FakeSimilarity),
+        ):
+            df = await inst.compare_anndata(
+                author_labels=["T cell", "B cell"],
+                anndata_objects=objects,
+                target_columns=["pred"],
+                author_column="author",
+                run_id="run",
+            )
+
+        assert df["algorithm"].tolist() == ["pred_0", "pred_0", "pred_1", "pred_1"]
+        assert df["algorithm_ontology_id"].tolist() == [
+            "CL:0000001",
+            "CL:0000002",
+            "CL:0000002",
+            "CL:0000002",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_object_with_other_rows_fails_before_any_model_call(
+        self, tmp_path
+    ):
+        import anndata as ad  # type: ignore
+        import pandas as pd  # type: ignore
+
+        inst = _instance(tmp_path)
+        objects = [
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell"], "pred": ["T cell"]}, index=["c1"]
+                )
+            ),
+            ad.AnnData(
+                obs=pd.DataFrame(
+                    {"author": ["T cell", "B cell"], "pred": ["T cell", "B cell"]},
+                    index=["c1", "c2"],
+                )
+            ),
+        ]
+        decompose = AsyncMock()
+        calls: list[tuple[str, int]] = []
+        with (
+            patch("cyteonto.cyteonto.decompose_labels", decompose),
+            patch("cyteonto.cyteonto.embed_texts", _embedder(calls, lambda *a: False)),
+        ):
+            with pytest.raises(ValueError, match="Label length mismatch for 'pred_1'"):
+                await inst.compare_anndata(
+                    author_labels=["T cell"],
+                    anndata_objects=objects,
+                    target_columns=["pred"],
+                    author_column="author",
+                    run_id="run",
+                )
+
+        assert decompose.await_count == 0
+        assert calls == []

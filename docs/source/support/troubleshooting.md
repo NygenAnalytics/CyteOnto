@@ -80,10 +80,6 @@ notebook.** Jupyter already runs an event loop, so `await` the calls directly in
 **`ValueError: Label length mismatch for '<algorithm>'`.** Each algorithm needs one label
 per author label, in the same order.
 
-**`ValueError: Duplicate algorithm name` from `compare_anndata()` with several AnnData
-objects.** Each object adds the same algorithm names. Compare one object per call; see
-[Labels in AnnData](../guides/anndata.md).
-
 **The log is too long.** CyteOnto logs at the `DEBUG` level by default. Set
 `CYTEONTO_LOG_LEVEL=INFO` or `WARNING` before you import `cyteonto`.
 
