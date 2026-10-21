@@ -518,7 +518,9 @@ async def decompose_label(
     """Decompose a label into one or more cell-type parts.
 
     If the request fails after its retries, the result has no parts, so that callers
-    can keep the label whole without caching the failure.
+    can keep the label whole without caching the failure. A label that exceeds the
+    usage limits would exceed them again, so it is kept whole as a single part, which
+    callers cache.
     """
     agent = _build_decompose_agent(base_agent, reasoning)
     usage = AgentUsage(agentName=agent.name or "LabelDecompositionAgent")
@@ -535,7 +537,7 @@ async def decompose_label(
         )
     except UsageLimitExceeded as e:
         logger.error(f"Usage limit exceeded while decomposing '{label}': {e}")
-        return LabelDecomposition.failed(label), usage
+        return LabelDecomposition.single(label), usage
     except Exception as e:
         logger.error(f"Decomposition failed for '{label}': {_format_exception(e)}")
         return LabelDecomposition.failed(label), usage

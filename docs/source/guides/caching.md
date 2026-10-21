@@ -48,11 +48,13 @@ and `plasma cell` share their cache entries.
 
 A label that the LLM could not describe after all retries is not cached: its embedding
 is made from the label text, and the next call with the run tries to describe it again.
-The same holds for ontology terms in `from_config()`, and for labels whose split failed.
+The same holds for ontology terms in `from_config()`, and for labels whose split failed,
+except a split that exceeds the usage limits: that label stays whole, and this is cached,
+since another try would exceed the limits again.
 
-When labels or terms get new descriptions, CyteOnto deletes the embedding files made
-from the old ones, those of both the primary and the fallback embedding model, before it
-embeds them again.
+When labels or terms get new descriptions, the embedding files made before are stale, for
+every embedding model: CyteOnto embeds the descriptions again instead of reusing those
+files. A stale file stays on disk until a new one replaces it.
 
 ## Regenerate caches
 
@@ -64,8 +66,8 @@ embeds them again.
   generates the descriptions and the primary model's embeddings again for all 2,902
   terms; the fallback model's are made again at the next failover. With the precomputed
   model pairs, run `python -m cyteonto.setup --force` instead, which downloads them
-  again. Other embedding models keep their ontology embeddings; delete them too when the
-  descriptions change.
+  again. The ontology embeddings of other embedding models are then stale, and are made
+  again by `from_config()` with such a model, or at a failover to it.
 
 ## Inspect and delete run caches
 

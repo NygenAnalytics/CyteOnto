@@ -63,7 +63,8 @@ of time. A request that exceeds the usage limits is not retried. When all attemp
   from its text and is not cached, so the next call tries again. With `use_cache=False`,
   a label with a cached description keeps it instead.
 - **A split** leaves the label whole for this call, and the next call with the run
-  tries again. With `use_cache=False`, a label with a cached split keeps it instead.
+  tries again. With `use_cache=False`, a label with a cached split keeps it instead. A
+  split that exceeds the usage limits leaves the label whole, and this is cached.
 - **An embedding** fails the batch. CyteOnto then switches to the fallback embedding
   configuration, if there is one that differs from `embedding`, as
   [Fall back to other models](../guides/models-and-providers.md#models-fallback)

@@ -1,11 +1,13 @@
 """Tests for cyteonto.cyteonto pure units (no live agents or network)."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 import pytest
+from pydantic_ai.exceptions import UsageLimitExceeded
 
 from cyteonto import storage
 from cyteonto.cyteonto import (
@@ -174,6 +176,9 @@ def _mock_mapping_for_compare(inst: CyteOnto) -> None:
     }
     inst.mapping = Mock()
     inst.mapping.labels_for_id = lambda oid: name_by_id.get(oid, [])
+    # The embedding model that compare() checks for a failover.
+    inst.embd_key = Mock()
+    inst._embedding_primary_used = False
 
 
 class TestCompareEmptyHandling:
@@ -391,6 +396,24 @@ class TestDecomposeLabels:
             dec, _ = await decompose_label(mock_base_agent, "T cell")
         assert dec == LabelDecomposition.failed("T cell")
         assert dec.parts == []
+
+    @pytest.mark.asyncio
+    async def test_a_label_over_the_usage_limits_stays_whole(self, mock_base_agent):
+        mock_agent = Mock()
+        mock_agent.name = "LabelDecompositionAgent"
+        with (
+            patch(
+                "cyteonto.describe._build_decompose_agent",
+                return_value=mock_agent,
+            ),
+            patch(
+                "cyteonto.describe._run_decompose_once",
+                new=AsyncMock(side_effect=UsageLimitExceeded("request_limit of 50")),
+            ),
+        ):
+            dec, _ = await decompose_label(mock_base_agent, "T cell")
+        # Another try would exceed the limits again, so the split is final.
+        assert dec == LabelDecomposition.single("T cell")
 
     @pytest.mark.asyncio
     async def test_a_crashed_task_leaves_its_label_without_parts(self, mock_base_agent):
@@ -693,7 +716,11 @@ class TestOntologyNames:
         assert inst._ontology_names_for_ids("CL:9999999") == ""
 
 
-def _instance(tmp_path: Path, fallback_embedding: EmbdConfig | None = None) -> CyteOnto:
+def _instance(
+    tmp_path: Path,
+    fallback_embedding: EmbdConfig | None = None,
+    embedding: EmbdConfig | None = None,
+) -> CyteOnto:
     """A CyteOnto with a mock agent on a two-term ontology in ``tmp_path``."""
     cell_ontology = tmp_path / "data" / "cell_ontology"
     cell_ontology.mkdir(parents=True, exist_ok=True)
@@ -709,7 +736,8 @@ def _instance(tmp_path: Path, fallback_embedding: EmbdConfig | None = None) -> C
     agent.model.model_name = "llm-model"
     return CyteOnto(
         agent=agent,
-        embedding=EmbdConfig(provider="nebius", model="primary-model", apiKey="k"),
+        embedding=embedding
+        or EmbdConfig(provider="nebius", model="primary-model", apiKey="k"),
         llm=LlmConfig(provider="nebius", model="llm-model"),
         data_dir=tmp_path / "data",
         fallback_embedding=fallback_embedding,
@@ -1006,16 +1034,15 @@ class TestEmbeddingTier:
 
 class TestOntologyEmbeddingFiles:
     @pytest.mark.asyncio
-    async def test_new_term_descriptions_remove_the_stale_embeddings(self, tmp_path):
+    async def test_new_term_descriptions_make_the_old_embeddings_stale(self, tmp_path):
         inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
         storage.save_descriptions(
             inst.paths.ontology_descriptions(inst.llm_key),
             {"CL:0000001": _description("t cell")},
             inst.llm_key,
         )
-        paths = [
-            _save_ontology_embeddings(inst, cfg) for cfg in (inst.embedding, _FALLBACK)
-        ]
+        for cfg in (inst.embedding, _FALLBACK):
+            _save_ontology_embeddings(inst, cfg)
         calls: list[tuple[str, int]] = []
         down = {"nebius", "openrouter"}
         fake = _embedder(calls, lambda provider, texts: provider in down)
@@ -1025,14 +1052,97 @@ class TestOntologyEmbeddingFiles:
         ):
             with pytest.raises(RuntimeError):
                 await inst._prepare_ontology(force_regenerate=False)
-            # Both files were made before the second term had a description.
-            assert not any(path.exists() for path in paths)
+            # Both files were made before the second term had a description. They
+            # can still be loaded until new ones replace them, but are not reused.
+            inst._load_ontology_embeddings()
             down.clear()
             calls.clear()
             await inst._prepare_ontology(force_regenerate=False)
+            assert calls == [("nebius", 2)]
+            # At a failover, the fallback model's file is made again too.
+            down.add("nebius")
+            calls.clear()
+            await inst._embed_with_failover(["a label"])
+
+        assert calls == [("nebius", 1), ("openrouter", 1), ("openrouter", 2)]
+
+    @pytest.mark.asyncio
+    async def test_files_made_after_the_descriptions_are_reused(self, tmp_path):
+        inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
+        _describe_terms(inst)
+        for cfg in (inst.embedding, _FALLBACK):
+            _save_ontology_embeddings(inst, cfg)
+        calls: list[tuple[str, int]] = []
+        down: set[str] = set()
+        fake = _embedder(calls, lambda provider, texts: provider in down)
+        with patch("cyteonto.cyteonto.embed_texts", fake):
+            await inst._prepare_ontology(force_regenerate=False)
+            down.add("nebius")
+            await inst._embed_with_failover(["a label"])
+
+        # Like the files that setup downloads, no term is embedded again.
+        assert calls == [("nebius", 1), ("openrouter", 1)]
+
+    @pytest.mark.asyncio
+    async def test_another_models_file_made_before_new_descriptions_is_made_again(
+        self, tmp_path
+    ):
+        inst = _instance(tmp_path)
+        other = _instance(tmp_path, embedding=_FALLBACK)
+        storage.save_descriptions(
+            inst.paths.ontology_descriptions(inst.llm_key),
+            {"CL:0000001": _description("t cell")},
+            inst.llm_key,
+        )
+        _save_ontology_embeddings(inst, _FALLBACK)
+        calls: list[tuple[str, int]] = []
+        with (
+            patch("cyteonto.cyteonto.describe_cells", _describe_mock()),
+            patch("cyteonto.cyteonto.embed_texts", _embedder(calls, lambda *a: False)),
+        ):
+            await inst._prepare_ontology(force_regenerate=False)
+            await other._prepare_ontology(force_regenerate=False)
+
+        # The other model's file predates the second term's description.
+        assert calls == [("nebius", 2), ("openrouter", 2)]
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_file_is_made_again(self, tmp_path):
+        inst = _instance(tmp_path)
+        _describe_terms(inst)
+        path = inst.paths.ontology_embeddings(inst.llm_key, inst.embd_key)
+        path.write_bytes(b"truncated")
+        calls: list[tuple[str, int]] = []
+        with patch("cyteonto.cyteonto.embed_texts", _embedder(calls, lambda *a: False)):
+            await inst._prepare_ontology(force_regenerate=False)
 
         assert calls == [("nebius", 2)]
-        assert paths[0].exists()
+        assert storage.load_ontology_embeddings(path) is not None
+
+    def test_a_failed_save_keeps_the_old_file(self, tmp_path, monkeypatch):
+        inst = _instance(tmp_path)
+        path = _save_ontology_embeddings(inst, inst.embedding)
+
+        def broken_savez(file, **arrays):
+            # Writes part of the file, as on a full disk, then fails.
+            with open(file, "wb") if isinstance(file, Path) else nullcontext(file) as f:
+                f.write(b"partial")
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(storage.np, "savez_compressed", broken_savez)
+        saved = storage.save_ontology_embeddings(
+            path,
+            np.zeros((2, 3), dtype=np.float32),
+            ["CL:0000001", "CL:0000002"],
+            inst.llm_key,
+            inst.embd_key,
+        )
+
+        assert not saved
+        loaded = storage.load_ontology_embeddings(path)
+        assert loaded is not None
+        np.testing.assert_array_equal(loaded[0], np.eye(2, 3))
+        assert [p.name for p in path.parent.iterdir()] == [path.name]
 
     @pytest.mark.asyncio
     async def test_force_regenerate_removes_the_fallback_embeddings(self, tmp_path):
@@ -1056,6 +1166,45 @@ class TestOntologyEmbeddingFiles:
         assert not fallback_path.exists()
 
 
+class _FakeSimilarity:
+    """Scores every pair 0.75 with the fallback model's embeddings, else 0.25."""
+
+    def __init__(self, owl_path, embeddings_path):
+        self.score = 0.75 if "fallback-model" in embeddings_path.name else 0.25
+
+    def similarity(self, *args, **kwargs):
+        return self.score
+
+
+def _primary_fails_from(n: int):
+    """Fail the primary model's embedding requests from its n-th on."""
+    primary_calls: list[list[str]] = []
+
+    def fails(provider: str, texts: list[str]) -> bool:
+        if provider != "nebius":
+            return False
+        primary_calls.append(texts)
+        return len(primary_calls) >= n
+
+    return fails
+
+
+async def _compare(inst: CyteOnto, calls, fails, **kwargs):
+    decompose = AsyncMock(
+        side_effect=lambda **kw: (
+            [LabelDecomposition.single(label) for label in kw["labels"]],
+            AgentUsage(),
+        )
+    )
+    with (
+        patch("cyteonto.cyteonto.describe_cells", _describe_mock()),
+        patch("cyteonto.cyteonto.decompose_labels", decompose),
+        patch("cyteonto.cyteonto.embed_texts", _embedder(calls, fails)),
+        patch("cyteonto.cyteonto.OntologySimilarity", _FakeSimilarity),
+    ):
+        return await inst.compare(**kwargs)
+
+
 class TestCompareAfterFailover:
     @pytest.mark.asyncio
     async def test_a_failover_during_compare_scores_with_the_fallback_model(
@@ -1063,56 +1212,106 @@ class TestCompareAfterFailover:
     ):
         inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
         _describe_terms(inst)
-        storage.save_ontology_embeddings(
-            inst.paths.ontology_embeddings(inst.llm_key, inst.embd_key),
-            np.eye(2, 3, dtype=np.float32),
-            ["CL:0000001", "CL:0000002"],
-            inst.llm_key,
-            inst.embd_key,
-        )
-        describe = AsyncMock(
-            side_effect=lambda **kw: (
-                [_description(label) for label in kw["labels"]],
-                AgentUsage(),
-            )
-        )
-        decompose = AsyncMock(
-            side_effect=lambda **kw: (
-                [LabelDecomposition.single(label) for label in kw["labels"]],
-                AgentUsage(),
-            )
-        )
-        # The primary embeds the author labels, then fails for the algorithm's.
-        primary_calls: list[list[str]] = []
-
-        def fails(provider: str, texts: list[str]) -> bool:
-            if provider != "nebius":
-                return False
-            primary_calls.append(texts)
-            return len(primary_calls) > 1
-
-        class FakeSimilarity:
-            def __init__(self, owl_path, embeddings_path):
-                self.score = 0.75 if "fallback-model" in embeddings_path.name else 0.25
-
-            def similarity(self, *args, **kwargs):
-                return self.score
-
+        _save_ontology_embeddings(inst, inst.embedding)
         calls: list[tuple[str, int]] = []
-        with (
-            patch("cyteonto.cyteonto.describe_cells", describe),
-            patch("cyteonto.cyteonto.decompose_labels", decompose),
-            patch("cyteonto.cyteonto.embed_texts", _embedder(calls, fails)),
-            patch("cyteonto.cyteonto.OntologySimilarity", FakeSimilarity),
-        ):
-            df = await inst.compare(
-                author_labels=["T cell"], algorithms={"algo": ["T cell"]}, run_id="run"
-            )
+        # The primary embeds the author labels, then fails for the algorithm's.
+        df = await _compare(
+            inst,
+            calls,
+            _primary_fails_from(2),
+            author_labels=["T cell"],
+            algorithms={"algo": ["T cell"]},
+            run_id="run",
+        )
 
         row = df.iloc[0]
         assert row["algorithm_ontology_id"] == "CL:0000001"
         # The pair is scored with the similarity of the fallback model's embeddings.
         assert row["cytescore_similarity"] == 0.75
+        # The author labels are embedded again with the fallback model.
+        assert calls == [
+            ("nebius", 1),
+            ("nebius", 1),
+            ("openrouter", 1),
+            ("openrouter", 2),
+            ("openrouter", 1),
+        ]
+        assert inst.model_pair_usage.embeddingTier == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_the_sides_before_a_failover_are_embedded_again(self, tmp_path):
+        inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
+        _describe_terms(inst)
+        _save_ontology_embeddings(inst, inst.embedding)
+        calls: list[tuple[str, int]] = []
+        # The primary embeds the author labels and a1, then fails for a2.
+        df = await _compare(
+            inst,
+            calls,
+            _primary_fails_from(3),
+            author_labels=["T cell"],
+            algorithms={"a1": ["T cell"], "a2": ["B cell"]},
+            run_id="run",
+        )
+
+        # Both algorithms are scored with one model, so they can be compared.
+        assert df["cytescore_similarity"].tolist() == [0.75, 0.75]
+        assert df["algorithm_ontology_id"].tolist() == ["CL:0000001", "CL:0000002"]
+        assert calls == [
+            ("nebius", 1),
+            ("nebius", 1),
+            ("nebius", 1),
+            ("openrouter", 1),
+            ("openrouter", 2),
+            ("openrouter", 1),
+            ("openrouter", 1),
+        ]
+        for kind, identifier in (("author", "author"), ("algorithm", "a1")):
+            path = inst.paths.user_embeddings(
+                "run", kind, identifier, inst.llm_key, _FALLBACK.to_artifact_key()
+            )
+            assert path.exists()
+
+    @pytest.mark.asyncio
+    async def test_a_failover_on_the_first_side_embeds_each_side_once(self, tmp_path):
+        inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
+        _describe_terms(inst)
+        _save_ontology_embeddings(inst, inst.embedding)
+        calls: list[tuple[str, int]] = []
+        df = await _compare(
+            inst,
+            calls,
+            _primary_fails_from(1),
+            author_labels=["T cell"],
+            algorithms={"algo": ["B cell"]},
+            run_id="run",
+        )
+
+        assert df["cytescore_similarity"].tolist() == [0.75]
+        assert calls == [
+            ("nebius", 1),
+            ("openrouter", 1),
+            ("openrouter", 2),
+            ("openrouter", 1),
+        ]
+        assert inst.model_pair_usage.embeddingTier == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_an_earlier_call_with_the_primary_makes_the_tier_mixed(
+        self, tmp_path
+    ):
+        inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
+        _describe_terms(inst)
+        _save_ontology_embeddings(inst, inst.embedding)
+        calls: list[tuple[str, int]] = []
+        # The first call embeds both sides with the primary; the second fails over
+        # on its algorithm.
+        fails = _primary_fails_from(4)
+        args = {"author_labels": ["T cell"], "algorithms": {"algo": ["B cell"]}}
+        await _compare(inst, calls, fails, run_id="r1", **args)
+        assert inst.model_pair_usage.embeddingTier == "primary"
+        await _compare(inst, calls, fails, run_id="r2", **args)
+
         assert inst.model_pair_usage.embeddingTier == "mixed"
 
 
@@ -1158,6 +1357,26 @@ class TestDecompositionCache:
         assert first == second == {"x": ["x"]}
         assert decompose.await_count == 2
         assert not (inst.paths.user_dir / "decompositions" / "run").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_split_over_the_usage_limits_is_not_retried(self, tmp_path):
+        inst = _instance(tmp_path)
+        agent = Mock()
+        agent.name = "LabelDecompositionAgent"
+        run_once = AsyncMock(side_effect=UsageLimitExceeded("request_limit of 50"))
+        with (
+            patch("cyteonto.describe._build_decompose_agent", return_value=agent),
+            patch("cyteonto.describe._run_decompose_once", new=run_once),
+        ):
+            first = await inst._resolve_label_parts(["x"], "run", use_cache=True)
+            # A new compare() call.
+            inst._call_decompositions = {}
+            second = await inst._resolve_label_parts(["x"], "run", use_cache=True)
+
+        assert first == second == {"x": ["x"]}
+        assert run_once.await_count == 1
+        (cache,) = (inst.paths.user_dir / "decompositions" / "run").glob("*.json")
+        assert json.loads(cache.read_text())["decompositions"] == {"x": ["x"]}
 
     @pytest.mark.asyncio
     async def test_a_failed_decomposition_is_not_retried_within_a_call(self, tmp_path):
@@ -1274,7 +1493,7 @@ class TestDescriptionCache:
         assert calls == [("nebius", 1), ("nebius", 1)]
 
     @pytest.mark.asyncio
-    async def test_new_descriptions_remove_the_stale_embeddings(self, tmp_path):
+    async def test_new_descriptions_make_the_old_embeddings_stale(self, tmp_path):
         inst = _instance(tmp_path, fallback_embedding=_FALLBACK)
         results = [[CellDescription.blank(label="plasmablast")], [_PLASMABLAST]]
         describe = AsyncMock(side_effect=lambda **kw: (results.pop(0), AgentUsage()))
@@ -1282,27 +1501,48 @@ class TestDescriptionCache:
         down: set[str] = set()
         fake = _embedder(calls, lambda provider, texts: provider in down)
         args = (["plasmablast"], "run", "author", "author")
-        paths = [
-            inst.paths.user_embeddings("run", "author", "author", inst.llm_key, key)
-            for key in (inst.embd_key, _FALLBACK.to_artifact_key())
-        ]
+        path = inst.paths.user_embeddings(
+            "run", "author", "author", inst.llm_key, inst.embd_key
+        )
         with (
             patch("cyteonto.cyteonto.describe_cells", describe),
             patch("cyteonto.cyteonto.embed_texts", fake),
         ):
             # Without a description, the label is embedded with its text.
             stale = await inst._embed_user_labels(*args, use_cache=True)
-            # As if an earlier failover had saved the labels for the fallback model.
-            paths[1].write_bytes(paths[0].read_bytes())
             down.update({"nebius", "openrouter"})
             with pytest.raises(RuntimeError, match="Failed to embed labels"):
                 await inst._embed_user_labels(*args, use_cache=True)
-            assert not any(path.exists() for path in paths)
+            # The file stays until a new one replaces it, but is not reused.
+            assert path.exists()
             down.clear()
             fresh = await inst._embed_user_labels(*args, use_cache=True)
 
         np.testing.assert_array_equal(stale, [[1.0, 0.0, 0.0]])
         np.testing.assert_array_equal(fresh, [[0.0, 1.0, 0.0]])
+
+    @pytest.mark.asyncio
+    async def test_another_models_file_made_before_new_descriptions_is_not_reused(
+        self, tmp_path
+    ):
+        inst = _instance(tmp_path)
+        other = _instance(tmp_path, embedding=_FALLBACK)
+        results = [[_description("plasmablast")], [_PLASMABLAST]]
+        describe = AsyncMock(side_effect=lambda **kw: (results.pop(0), AgentUsage()))
+        calls: list[tuple[str, int]] = []
+        args = (["plasmablast"], "run", "author", "author")
+        with (
+            patch("cyteonto.cyteonto.describe_cells", describe),
+            patch("cyteonto.cyteonto.embed_texts", _embedder(calls, lambda *a: False)),
+        ):
+            await inst._embed_user_labels(*args, use_cache=True)
+            old = await other._embed_user_labels(*args, use_cache=True)
+            # The first instance describes the label again, which the files share.
+            await inst._embed_user_labels(*args, use_cache=False)
+            new = await other._embed_user_labels(*args, use_cache=True)
+
+        np.testing.assert_array_equal(old, [[1.0, 0.0, 0.0]])
+        np.testing.assert_array_equal(new, [[0.0, 1.0, 0.0]])
 
 
 class TestMatchWithoutLabels:

@@ -105,7 +105,7 @@ own providers and keeps the results, descriptions and embeddings of each job.
 | `from_config()` with another LLM | One description per term, 2,902, and one embedding per term, once |
 | `from_config()` with the default LLM and another embedding model | One embedding per term, 2,902, once |
 | `compare()` | One request to split each distinct label of the run. Then, separately for the author labels and for each algorithm, one description and one embedding of each distinct label or part |
-| `compare()` at the first embedding failover | One embedding per term, 2,902, with the fallback model, unless its ontology embeddings exist |
+| `compare()` at the first embedding failover | One embedding per term, 2,902, with the fallback model, unless its ontology embeddings exist. The labels embedded earlier in the call are embedded again with the fallback model |
 | `compare()` again with the same `run_id` and labels | None |
 
 So a label that both the authors and an algorithm use is described and embedded twice.

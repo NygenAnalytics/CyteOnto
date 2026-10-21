@@ -195,7 +195,7 @@ class CyteOnto:
         self._similarity: OntologySimilarity | None = None
         self._ontology_embeddings: np.ndarray | None = None
         self._ontology_ids: list[str] | None = None
-        # The embedding models whose files go stale when descriptions change.
+        # The embedding models whose ontology files force_regenerate deletes.
         self._embd_keys = [self.embd_key]
         if self.fallback_embedding is not None:
             fallback_key = self.fallback_embedding.to_artifact_key()
@@ -312,7 +312,8 @@ class CyteOnto:
         loaded = storage.load_ontology_embeddings(
             self.paths.ontology_embeddings(self.llm_key, embd_key)
         )
-        if loaded is not None:
+        desc_path = self.paths.ontology_descriptions(self.llm_key)
+        if loaded is not None and storage.made_after_descriptions(loaded[2], desc_path):
             return loaded[0], loaded[1]
         if descriptions is None:
             descriptions = storage.load_descriptions(
@@ -431,7 +432,8 @@ class CyteOnto:
         checks that the term embeddings for ``llm`` and ``embedding`` exist. Terms
         without a description are described with ``agent``, and ``fallback_agent``
         if given, and then every term is embedded again. When every term has a
-        description and the embeddings file exists, no model is called. If
+        description and the embeddings file was made after the descriptions last
+        changed, no model is called. If
         ``embedding`` fails to embed the terms, the instance checks that
         ``fallback_embedding`` works and switches to it and its ontology embeddings,
         which are made if they are missing.
@@ -498,9 +500,15 @@ class CyteOnto:
 
         missing_indices = [i for i, oid in enumerate(ids) if oid not in existing]
 
-        if not missing_indices and emb_path.exists():
+        metadata = storage.load_embeddings_metadata(emb_path)
+        current = metadata is not None and storage.made_after_descriptions(
+            metadata, desc_path
+        )
+        if not missing_indices and current:
             logger.info(f"Ontology embeddings already present at {emb_path}")
             return
+        if metadata is not None and not current:
+            logger.info(f"Ontology embeddings at {emb_path} predate the descriptions")
 
         if missing_indices:
             missing_labels = [joined_labels[i] for i in missing_indices]
@@ -517,12 +525,10 @@ class CyteOnto:
                 if not desc.is_blank()
             }
             if described:
-                # Embeddings made from the old descriptions are stale. Remove them
-                # first, so that a failure below cannot leave them in use.
-                for p in emb_paths:
-                    p.unlink(missing_ok=True)
-            existing.update(described)
-            storage.save_descriptions(desc_path, existing, self.llm_key)
+                # Embedding files made before this are now stale for every model.
+                # They stay on disk until new ones replace them.
+                existing.update(described)
+                storage.save_descriptions(desc_path, existing, self.llm_key)
 
         await self._embed_ontology(existing)
 
@@ -580,7 +586,11 @@ class CyteOnto:
         )
         if all_real:
             cached = storage.load_user_embeddings(emb_path)
-            if cached is not None and cached[1] == labels:
+            if (
+                cached is not None
+                and cached[1] == labels
+                and storage.made_after_descriptions(cached[2], desc_path)
+            ):
                 logger.info(
                     f"Reusing cached embeddings for '{identifier}' ({len(labels)} labels)"
                 )
@@ -605,17 +615,12 @@ class CyteOnto:
                 for lbl, desc in zip(missing, new_descs)
                 if not desc.is_blank()
             }
-            if described:
-                # Embeddings made from the old descriptions are stale. Remove them
-                # first, so that a failure below cannot leave them in use.
-                for key in self._embd_keys:
-                    self.paths.user_embeddings(
-                        run_id, kind, identifier, self.llm_key, key
-                    ).unlink(missing_ok=True)
             # A label that gets no new description keeps its cached one, which is
             # embedded below, so that the file matches the embeddings.
             existing = {**stored, **described}
-            storage.save_descriptions(desc_path, existing, self.llm_key)
+            if described:
+                # Embedding files made before this are now stale for every model.
+                storage.save_descriptions(desc_path, existing, self.llm_key)
 
         # Build the text to embed for every label position. Empty labels are
         # skipped entirely (no description, no embedding) and get a zero
@@ -942,20 +947,49 @@ class CyteOnto:
         # string and often score near zero. Decompose each label into cell-type parts
         # via LLM, then embed and match each part separately.
         self._call_decompositions = {}
-        author_parts_map = await self._resolve_label_parts(
-            author_labels, run_id, use_cache
-        )
-        author_parts_list = _unique_parts(author_labels, author_parts_map)
-        author_emb = await self._embed_user_labels(
-            labels=author_parts_list,
-            run_id=run_id,
-            kind="author",
-            identifier="author",
-            use_cache=use_cache,
-        )
+        primary_used = self._embedding_primary_used
+        # Every side is embedded before any is matched. Its parts and embeddings, with
+        # the model that made them, are keyed by "author" or the algorithm name.
+        parts: dict[str, tuple[dict[str, list[str]], list[str]]] = {}
+        embedded: dict[str, tuple[np.ndarray, ModelArtifactKey]] = {}
 
+        async def embed_side(identifier: str, cached: bool) -> None:
+            emb = await self._embed_user_labels(
+                labels=parts[identifier][1],
+                run_id=run_id,
+                kind="author" if identifier == "author" else "algorithm",
+                identifier=identifier,
+                use_cache=cached,
+            )
+            embedded[identifier] = (emb, self.embd_key)
+
+        sides = [("author", author_labels)]
+        for algo_name, algo_labels in algo_items:
+            if len(algo_labels) != len(author_labels):
+                raise ValueError(
+                    f"Label length mismatch for '{algo_name}': "
+                    f"{len(algo_labels)} vs {len(author_labels)} author labels"
+                )
+            sides.append((algo_name, algo_labels))
+        for identifier, labels in tqdm(sides, desc="Embedding labels"):
+            parts_map = await self._resolve_label_parts(labels, run_id, use_cache)
+            parts[identifier] = (parts_map, _unique_parts(labels, parts_map))
+            await embed_side(identifier, cached=use_cache)
+
+        # An embedding failover partway through switches the instance to the
+        # fallback model and its ontology embeddings. The sides embedded before it
+        # are embedded again with that model, so that every label of the call is
+        # matched and scored with one model. Their descriptions were saved above.
+        stale = [side for side, (_, key) in embedded.items() if key != self.embd_key]
+        if stale:
+            # The primary model's embeddings of this call are no longer matched.
+            self._embedding_primary_used = primary_used
+        for identifier in stale:
+            await embed_side(identifier, cached=True)
+
+        author_parts_map, author_parts_list = parts["author"]
         author_matches = self._match(
-            author_emb,
+            embedded["author"][0],
             min_similarity=min_match_similarity,
             # labels=author_parts_list
         )
@@ -964,31 +998,13 @@ class CyteOnto:
         similarity = self._ensure_similarity()
 
         rows: list[dict[str, Any]] = []
-        for algo_name, algo_labels in tqdm(algo_items, desc="Comparing algorithms"):
-            if len(algo_labels) != len(author_labels):
-                raise ValueError(
-                    f"Label length mismatch for '{algo_name}': "
-                    f"{len(algo_labels)} vs {len(author_labels)} author labels"
-                )
-
-            algo_parts_map = await self._resolve_label_parts(
-                algo_labels, run_id, use_cache
-            )
-            algo_parts_list = _unique_parts(algo_labels, algo_parts_map)
-            algo_emb = await self._embed_user_labels(
-                labels=algo_parts_list,
-                run_id=run_id,
-                kind="algorithm",
-                identifier=algo_name,
-                use_cache=use_cache,
-            )
+        for algo_name, algo_labels in algo_items:
+            algo_parts_map, algo_parts_list = parts[algo_name]
             algo_matches = self._match(
-                algo_emb,
+                embedded[algo_name][0],
                 min_similarity=min_match_similarity,
                 # labels=algo_parts_list
             )
-            # An embedding failover replaces the ontology embeddings to score with.
-            similarity = self._ensure_similarity()
             algo_lookup = dict(zip(algo_parts_list, algo_matches))
             algo_empty = [_is_empty(lbl) for lbl in algo_labels]
 

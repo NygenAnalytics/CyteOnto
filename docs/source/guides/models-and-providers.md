@@ -162,8 +162,9 @@ cyto = await CyteOnto.from_config(
   are missing. From then on, the instance embeds with the fallback configuration, saves
   the label embeddings under that model pair, and matches the labels against the
   ontology embeddings of the primary `llm` with the fallback embedding model. In the
-  call that fails over, the labels embedded before the failover were matched with the
-  primary model. A fallback configuration equal to `embedding` is not used.
+  call that fails over, the labels embedded before the failover are embedded again with
+  the fallback model, so that all the scores of the call come from one model. A fallback
+  configuration equal to `embedding` is not used.
 
 `setup` does not download the ontology embeddings of the default LLM with the fallback
 embedding model. At the first failover, CyteOnto creates them by embedding the 2,902
