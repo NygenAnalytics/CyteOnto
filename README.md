@@ -1,4 +1,4 @@
-<h1><img src="https://docs.nygen.io/assets/brand/logo/cyteonto.svg" alt="" width="48" height="48" align="right"> CyteOnto</h1>
+<h1><img src="https://docs.nygen.io/assets/brand/logo/cyteonto-dark.png" alt="" width="96" align="right"> CyteOnto</h1>
 
 Semantic Cell Type Annotation Comparison Using Large Language Models and Cell Ontology
  
