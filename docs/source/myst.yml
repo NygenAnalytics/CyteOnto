@@ -1,6 +1,7 @@
 version: 1
 project:
   title: CyteOnto
+  short_title: Overview
   description: Compare cell type labels in Cell Ontology space with the hosted CyteOnto API
     or the cyteonto Python package, and score how similar the author's and each
     algorithm's cell types are.
@@ -59,10 +60,16 @@ project:
     - url: https://github.com/NygenAnalytics/CyteOnto/issues
       title: Report an issue
 site:
-  template: book-theme
+  template: https://github.com/myst-templates/book-theme/archive/23f2df5493e23dfb1d9433c8aa64c87beb4232a3.zip
   parts:
     primary_sidebar_footer: <!-- No sidebar footer. -->
+    navbar_end: '<a class="docs-home-link" href="https://docs.nygen.io/"><img class="brand-symbol" src="https://docs.nygen.io/assets/brand/logo/nygen-symbol.svg" alt="Nygen documentation home" width="32" height="32"></a>'
   options:
     folders: true
+    style: https://docs.nygen.io/assets/brand/myst.css
+    favicon: https://docs.nygen.io/assets/brand/logo/cyteonto.ico
+    logo: https://docs.nygen.io/assets/brand/logo/cyteonto.svg
+    logo_dark: https://docs.nygen.io/assets/brand/logo/cyteonto.svg
+    logo_alt: CyteOnto
     logo_text: CyteOnto
     hide_authors: true

@@ -895,7 +895,7 @@ dev = [{ name = "seaborn", specifier = ">=0.13.2" }]
 docs = [
     { name = "jupytext", specifier = ">=1.19.6" },
     { name = "myst-parser" },
-    { name = "mystmd", specifier = ">=1.11.0" },
+    { name = "mystmd", specifier = "==1.11.0" },
     { name = "nbformat", specifier = ">=5.10" },
     { name = "pyyaml" },
     { name = "sphinx" },

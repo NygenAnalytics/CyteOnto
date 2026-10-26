@@ -65,7 +65,7 @@ dev = [
 ]
 # Builds the MyST site and the Sphinx API reference (make -C docs html).
 docs = [
-    "mystmd>=1.11.0",
+    "mystmd==1.11.0",
     "jupytext>=1.19.6",
     "nbformat>=5.10",
     "myst-parser",
