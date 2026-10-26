@@ -1,4 +1,6 @@
-# CyteOnto: Semantic Cell Type Annotation Comparison Using Large Language Models and Cell Ontology
+<h1><img src="https://docs.nygen.io/assets/brand/logo/cyteonto-dark.png" alt="" width="96" align="right"> CyteOnto</h1>
+
+Semantic Cell Type Annotation Comparison Using Large Language Models and Cell Ontology
  
 `cyteonto` compares two sets of cell type annotations against the [Cell Ontology (CL)](https://obofoundry.org/ontology/cl.html). Given label lists from a study author and one or more annotation algorithms, it:
 

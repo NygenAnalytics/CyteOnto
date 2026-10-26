@@ -35,9 +35,13 @@ typehints_defaults = "comma"
 always_use_bars_union = True
 
 html_theme = "sphinx_book_theme"
+html_css_files = ["https://docs.nygen.io/assets/brand/docs.css"]
+html_logo = "https://docs.nygen.io/assets/brand/logo/cyteonto.svg"
+html_favicon = "https://docs.nygen.io/assets/brand/logo/cyteonto.ico"
 html_title = "CyteOnto API reference"
 html_baseurl = "https://docs.nygen.io/CyteOnto/api/"
 html_theme_options = {
+    "logo": {"text": "CyteOnto", "alt_text": "CyteOnto"},
     "repository_url": "https://github.com/NygenAnalytics/CyteOnto",
     "path_to_docs": "docs/source/reference/api",
     "use_repository_button": True,
