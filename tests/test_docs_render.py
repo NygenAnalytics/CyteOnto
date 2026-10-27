@@ -5,6 +5,7 @@ The build tests need the docs dependency group and skip without it.
 
 from copy import deepcopy
 from datetime import datetime
+from html import unescape
 from html.parser import HTMLParser
 import json
 import os
@@ -722,7 +723,8 @@ def rendered_discovery_files(
         page = html / route.strip("/") / "index.html"
         page.parent.mkdir(parents=True, exist_ok=True)
         page.write_text(
-            f"<html><head><title>{name}</title></head>"
+            f'<html><head><title>{name}</title><meta name="description" '
+            f'content="Read the {name} guide."></head>'
             f"<body><nav>Site navigation</nav><article><h1>{name}</h1>"
             "<p>Saved result: 42 cells.</p>"
             "<pre>def count():\n    return 42\n\nprint(count())\n42</pre>"
@@ -755,7 +757,9 @@ def rendered_discovery_files(
         "# CyteOnto class\n\n```{autoclass} cyteonto.CyteOnto\n:members:\n```\n"
     )
     (html / "api" / "cyteonto.html").write_text(
-        '<html><head><link rel="canonical" '
+        "<html><head><title>CyteOnto class</title>"
+        '<meta name="description" content="Read the Python class reference.">'
+        '<link rel="canonical" '
         'href="https://docs.nygen.io/CyteOnto/api/cyteonto.html" /></head>'
         "<body>CyteOnto(agent, embedding, llm, data_dir=None)</body></html>"
     )
@@ -1407,3 +1411,248 @@ def test_staged_config_paths_are_relative_to_the_site(executable_docs: Any) -> N
     for path, original in zip(paths, originals, strict=True):
         assert not Path(path).is_absolute(), path
         assert (site / path).resolve() == (build_docs.SOURCE / original).resolve()
+
+
+@pytest.mark.parametrize("base_url", ["", "/CyteOnto"])
+def test_api_pages_join_the_staged_guide_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> None:
+    pytest.importorskip("jupytext")
+    pytest.importorskip("nbformat")
+    yaml = pytest.importorskip("yaml")
+    from docs import build_docs
+
+    api = tmp_path / "docs" / "build" / "api"
+    api.mkdir(parents=True)
+    (api / "index.html").write_text(
+        '<nav class="docs-api-tree"><ul><li>'
+        '<a href="cyteonto.html"><span>CyteOnto class</span></a>'
+        '</li><li><a href="configuration.html">Models &amp; configuration</a>'
+        "</li></ul></nav>"
+    )
+    site = tmp_path / "site"
+    site.mkdir()
+    config = {
+        "project": {
+            "toc": [
+                {"file": "index.md"},
+                {
+                    "title": "Reference",
+                    "children": [
+                        {"url": f"{base_url}/api/index.html", "title": "API reference"}
+                    ],
+                },
+            ]
+        }
+    }
+    (site / "myst.yml").write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(build_docs, "DOCS", api.parents[1])
+    monkeypatch.setenv("BASE_URL", base_url)
+
+    build_docs.include_api_navigation(site)
+
+    toc = yaml.safe_load((site / "myst.yml").read_text())["project"]["toc"]
+    assert toc[0] == {"file": "index.md"}
+    assert toc[1]["children"][0]["children"] == [
+        {
+            "title": "CyteOnto class",
+            "url": f"{base_url}/api/cyteonto.html",
+            "open_in_same_tab": True,
+        },
+        {
+            "title": "Models & configuration",
+            "url": f"{base_url}/api/configuration.html",
+            "open_in_same_tab": True,
+        },
+    ]
+
+
+@pytest.mark.parametrize("base_url", ["", "/CyteOnto"])
+def test_api_pages_keep_the_guide_header_navigation_and_existing_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> None:
+    pytest.importorskip("jupytext")
+    pytest.importorskip("nbformat")
+    pytest.importorskip("yaml")
+    from docs import build_docs
+
+    monkeypatch.setenv("BASE_URL", base_url)
+    html = tmp_path / "html"
+    api = html / "api"
+    api.mkdir(parents=True)
+    header = (
+        '<nav class="myst-top-nav-bar"><div>'
+        '<button class="myst-top-nav-menu-button flex">Menu</button>'
+        f'<a class="myst-home-link" href="{base_url}/"><img src="logo.svg"/>CyteOnto</a>'
+        '</div><button aria-expanded="false" data-state="closed" class="myst-search-bar flex myst-search-bar-disabled">Search'
+        "<script>window.headerScript = true;</script></button>"
+        '<button class="myst-theme-button">Theme</button></nav>'
+    )
+    navigation = (
+        '<nav class="myst-primary-sidebar-toc"><div class="myst-toc">'
+        f'<a class="myst-toc-item myst-toc-item-exact font-bold p-2 my-1" aria-current="page" href="{base_url}/">Overview</a>'
+        f'<a href="{base_url}/tutorials/remote-stores/">Remote stores</a>'
+        f'<a href="{base_url}/api/index.html">API reference</a>'
+        f'<a href="{base_url}/api/cyteonto.html">CyteOnto</a>'
+        "</div></nav>"
+    )
+    (html / "index.html").write_text(
+        f"<html><head></head><body>{header}{navigation}</body></html>"
+    )
+    article = '<article><h1 id="cyteonto">CyteOnto</h1><a href="cyteonto.html#method">Method</a></article>'
+    for name in ("index.html", "cyteonto.html", "search.html", "genindex.html"):
+        (api / name).write_text(
+            '<html><head></head><body class="docs-api"><header>'
+            '<nav class="docs-header-placeholder"></nav></header>'
+            '<div class="myst-primary-sidebar-nav docs-api-navigation">'
+            '<nav class="docs-api-tree"><ul><li>Original API menu</li></ul></nav>'
+            f"</div>{article}</body></html>"
+        )
+    (api / "objects.inv").write_bytes(b"existing Sphinx inventory")
+    static = api / "_static"
+    static.mkdir()
+    (static / "webpack-macros.html").write_text("{% macro assets() %}{% endmacro %}")
+
+    build_docs.integrate_api_navigation(html)
+
+    for page in api.glob("*.html"):
+        contents = page.read_text()
+        copied_header = build_docs.html_fragment(contents, "myst-top-nav-bar")
+        copied_navigation = build_docs.html_fragment(
+            contents, "myst-primary-sidebar-toc"
+        )
+        assert 'class="myst-search-bar search-button__button"' in copied_header
+        assert (
+            'class="myst-top-nav-menu-button sidebar-toggle primary-toggle"'
+            in copied_header
+        )
+        assert "myst-search-bar-disabled" not in copied_header
+        assert 'aria-label="Search documentation"' in copied_header
+        assert 'aria-controls="pst-search-dialog"' in copied_header
+        assert "aria-expanded" not in copied_header
+        assert "data-state" not in copied_header
+        assert "<script" not in copied_header
+        assert "Original API menu" not in contents
+        assert "font-bold" not in copied_navigation
+        assert "myst-toc-item-exact" not in copied_navigation
+        assert "p-2" not in copied_navigation
+        assert "my-1" not in copied_navigation
+        assert re.findall(r'href="([^"]+)"', copied_navigation) == re.findall(
+            r'href="([^"]+)"', navigation
+        )
+        selected = re.findall(r'<a\b[^>]*aria-current="page"[^>]*>', copied_navigation)
+        if page.name in {"index.html", "cyteonto.html"}:
+            assert len(selected) == 1
+            assert f'href="{base_url}/api/{page.name}"' in selected[0]
+        else:
+            assert not selected
+        assert article in contents
+        assert contents.count('src="https://docs.nygen.io/assets/brand/docs.js"') == 1
+        assert "nygen-docs-sidebar:" in contents
+        assert "fonts/inter/latin.woff2" in contents
+    assert (api / "objects.inv").read_bytes() == b"existing Sphinx inventory"
+    assert (
+        static / "webpack-macros.html"
+    ).read_text() == "{% macro assets() %}{% endmacro %}"
+
+
+def test_html_fragment_rejects_missing_or_duplicate_navigation() -> None:
+    pytest.importorskip("jupytext")
+    pytest.importorskip("nbformat")
+    pytest.importorskip("yaml")
+    from docs import build_docs
+
+    for contents in (
+        "<html></html>",
+        '<nav class="menu"></nav><nav class="menu"></nav>',
+    ):
+        with pytest.raises(ValueError, match="Expected one complete .menu element"):
+            build_docs.html_fragment(contents, "menu")
+
+
+@pytest.mark.parametrize(
+    ("route", "title", "expected"),
+    [
+        ("/", "CyteOnto - CyteOnto", "CyteOnto documentation"),
+        (
+            "/api/index.html",
+            "CyteOnto Python API reference &#8212; CyteOnto API reference",
+            "CyteOnto Python API reference",
+        ),
+        (
+            "/guides/example/",
+            "Data &amp; labels - CyteOnto",
+            "Data &amp; labels - CyteOnto",
+        ),
+    ],
+)
+def test_page_metadata_preserves_content_and_completes_share_tags(
+    route: str, title: str, expected: str
+) -> None:
+    from docs import build_docs
+
+    class Metadata(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.values: dict[str, list[str]] = {}
+
+        def handle_starttag(
+            self, tag: str, attrs: list[tuple[str, str | None]]
+        ) -> None:
+            attributes = dict(attrs)
+            if tag == "meta":
+                name = attributes.get("name") or attributes.get("property")
+                self.values.setdefault(name, []).append(attributes.get("content"))
+
+    canonical = build_docs.PUBLIC_URL + route
+    body = "<body><h1>Keep this title</h1><p>Keep this content.</p></body></html>"
+    source = (
+        f"<html><head><title>{title}</title>"
+        '<meta content="Compare &quot;labels&quot; &amp; cell types." name="description">'
+        '<meta property="og:title" content="Old title">'
+        '<meta property="og:url" content="https://example.invalid/">'
+        '<meta name="twitter:card" content="summary_large_image">'
+        "</head>" + body
+    )
+
+    result = build_docs.update_page_metadata(source, canonical)
+
+    assert result.endswith(body)
+    assert f"<title>{expected}</title>" in result
+    assert build_docs.update_page_metadata(result, canonical) == result
+    metadata = Metadata()
+    metadata.feed(result)
+    values = metadata.values
+    assert values["og:title"] == [unescape(expected)]
+    assert all(len(value) == 1 for value in values.values())
+    assert (
+        values["description"]
+        == values["og:description"]
+        == ['Compare "labels" & cell types.']
+    )
+    assert values["og:url"] == [canonical]
+    assert values["og:type"] == ["website"]
+    image = "https://docs.nygen.io/assets/brand/logo/cyteonto-dark.png"
+    assert values["og:image"] == values["twitter:image"] == [image]
+    assert values["og:image:width"] == values["og:image:height"] == ["512"]
+    assert values["og:image:type"] == ["image/png"]
+    assert values["og:image:alt"] == values["twitter:image:alt"] == ["CyteOnto logo"]
+    assert values["twitter:card"] == ["summary"]
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "<title>Missing description</title>",
+        '<meta name="description" content="Missing title">',
+        '<title>Empty description</title><meta name="description" content="">',
+    ],
+)
+def test_page_metadata_rejects_missing_authored_metadata(head: str) -> None:
+    from docs import build_docs
+
+    with pytest.raises(ValueError, match="Expected a title and description"):
+        build_docs.update_page_metadata(
+            f"<html><head>{head}</head><body>Content</body></html>",
+            build_docs.PUBLIC_URL + "/",
+        )
