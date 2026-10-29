@@ -2,14 +2,14 @@
 
 These instructions cover the documentation sources and site builds. The site documents the `cyteonto` Python package and the hosted HTTP API, and is published at `https://docs.nygen.io/CyteOnto/`.
 
-- Write pages in Markdown in `docs/source/`. Code in the pages is not executed, so check every function, argument, default, column name and request field against the source: `cyteonto/` for the package, and `modal_app/models.py`, `modal_app/api.py` and `modal_app/worker.py` for the HTTP API.
+- Write pages in Markdown in `docs/source/`. Check the code in the pages against `cyteonto/` for the package, and `modal_app/models.py`, `modal_app/api.py` and `modal_app/worker.py` for the HTTP API.
 - MyST builds the pages. Sphinx builds only `docs/source/reference/api/`, which the site serves at `/api/`.
 - Import the package as `import cyteonto` or `from cyteonto import ...`, and use `cyteonto.*` autodoc targets, the names under which users import each object.
 - Document the fields of the pydantic models as `py:attribute` entries inside their `autoclass` directive, in field order, with a `:value:` for each optional field; autodoc does not list pydantic fields.
 - Start every page with front matter holding one `description:` line, then a label and one H1 title. Add every page to the table of contents in `docs/source/myst.yml` and to `docs/source/llms.txt`, with a one-line summary.
 - The reference scores in `guides/similarity-metrics.md` and `guides/results.md` and the description in `getting-started/how-cyteonto-works.md` come from the precomputed files of the default model pair. Recompute them when those files change.
 
-Never leave HTML comments in the pages. The site publishes each page's source file, page data and search index, so comments become public. Avoid math markup, which the plain-text exports render three times; write formulas as code.
+Avoid math markup, which the plain-text exports render three times; write formulas as code.
 
 ## Tabs
 
